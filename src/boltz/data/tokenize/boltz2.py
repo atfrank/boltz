@@ -1,18 +1,10 @@
 from dataclasses import astuple, dataclass
-from typing import Optional
 
 import numpy as np
 
 from boltz.data import const
 from boltz.data.tokenize.tokenizer import Tokenizer
-from boltz.data.types import (
-    AffinityInfo,
-    Input,
-    StructureV2,
-    TokenBondV2,
-    Tokenized,
-    TokenV2,
-)
+from boltz.data.types import Input, StructureV2, TokenBondV2, Tokenized, TokenV2
 
 
 @dataclass
@@ -101,18 +93,13 @@ def get_unk_token(chain: np.ndarray) -> int:
     return res_id
 
 
-def tokenize_structure(  # noqa: C901, PLR0915
-    struct: StructureV2,
-    affinity: Optional[AffinityInfo] = None,
-) -> tuple[np.ndarray, np.ndarray]:
+def tokenize_structure(struct: StructureV2) -> tuple[np.ndarray, np.ndarray]:  # noqa: C901, PLR0915
     """Tokenize a structure.
 
     Parameters
     ----------
     struct : StructureV2
         The structure to tokenize.
-    affinity : Optional[AffinityInfo]
-        The affinity information.
 
     Returns
     -------
@@ -141,9 +128,9 @@ def tokenize_structure(  # noqa: C901, PLR0915
         res_start = chain["res_idx"]
         res_end = chain["res_idx"] + chain["res_num"]
         is_protein = chain["mol_type"] == const.chain_type_ids["PROTEIN"]
-        affinity_mask = (affinity is not None) and (
-            int(chain["asym_id"]) == int(affinity.chain_id)
-        )
+        is_rna = chain["mol_type"] == const.chain_type_ids["RNA"]
+        is_dna = chain["mol_type"] == const.chain_type_ids["DNA"]
+        affinity_mask = chain["affinity"]
 
         for res in struct.residues[res_start:res_end]:
             # Get atom indices
@@ -193,6 +180,44 @@ def tokenize_structure(  # noqa: C901, PLR0915
                             atom_c["coords"],
                         )
                         frame_rot = frame_rot.flatten()
+                
+                elif is_rna or is_dna:
+                    # Get frame atoms for RNA/DNA backbone
+                    atom_st = res["atom_idx"]
+                    atom_en = res["atom_idx"] + res["atom_num"]
+                    atoms = struct.atoms[atom_st:atom_en]
+                    
+                    # Find backbone atoms: P, C4', C1' for RNA/DNA frame
+                    atom_p = None
+                    atom_c4p = None
+                    atom_c1p = None
+                    
+                    for atom in atoms:
+                        atom_name = atom["name"].strip()
+                        if atom_name == "P":
+                            atom_p = atom
+                        elif atom_name == "C4'":
+                            atom_c4p = atom
+                        elif atom_name == "C1'":
+                            atom_c1p = atom
+                    
+                    # Compute frame and mask if all backbone atoms are present
+                    if atom_p is not None and atom_c4p is not None and atom_c1p is not None:
+                        frame_mask = atom_p["is_present"]
+                        frame_mask &= atom_c4p["is_present"]
+                        frame_mask &= atom_c1p["is_present"]
+                        frame_mask = bool(frame_mask)
+                        if frame_mask:
+                            frame_rot, frame_t = compute_frame(
+                                atom_p["coords"],
+                                atom_c4p["coords"],
+                                atom_c1p["coords"],
+                            )
+                            frame_rot = frame_rot.flatten()
+                    else:
+                        # Fallback: try using different atoms if standard ones not available
+                        # For terminal residues, P might not be present
+                        frame_mask = False
 
                 # Create token
                 token = TokenData(
@@ -364,9 +389,7 @@ class Boltz2Tokenizer(Tokenizer):
 
         """
         # Tokenize the structure
-        token_data, token_bonds = tokenize_structure(
-            data.structure, data.record.affinity
-        )
+        token_data, token_bonds = tokenize_structure(data.structure)
 
         # Tokenize the templates
         if data.templates is not None:

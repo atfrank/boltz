@@ -20,7 +20,6 @@ from boltz.data import const
 from boltz.data.mol import load_molecules
 from boltz.data.parse.mmcif import parse_mmcif
 from boltz.data.types import (
-    AffinityInfo,
     Atom,
     AtomV2,
     Bond,
@@ -157,7 +156,6 @@ class ParsedChain:
     cyclic_period: int
     sequence: Optional[str] = None
     affinity: Optional[bool] = False
-    affinity_mw: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -1079,23 +1077,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         # Get entity type and sequence
         entity_type = next(iter(items[0].keys())).lower()
 
-        # Get ids
-        ids = []
-        for item in items:
-            if isinstance(item[entity_type]["id"], str):
-                ids.append(item[entity_type]["id"])
-            elif isinstance(item[entity_type]["id"], list):
-                ids.extend(item[entity_type]["id"])
-
-        # Check if any affinity ligand is present
-        if len(ids) == 1:
-            affinity = ids[0] in affinity_ligands
-        elif (len(ids) > 1) and any(x in affinity_ligands for x in ids):
-            msg = "Cannot compute affinity for a ligand that has multiple copies!"
-            raise ValueError(msg)
-        else:
-            affinity = False
-
         # Ensure all the items share the same msa
         msa = -1
         if entity_type == "protein":
@@ -1179,18 +1160,10 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             if isinstance(seq, str):
                 seq = [seq]
 
-            if affinity and len(seq) > 1:
-                msg = "Cannot compute affinity for multi residue ligands!"
-                raise ValueError(msg)
-
             residues = []
-            affinity_mw = None
             for res_idx, code in enumerate(seq):
                 # Get mol
                 ref_mol = get_mol(code, ccd, mol_dir)
-
-                if affinity:
-                    affinity_mw = AllChem.Descriptors.MolWt(ref_mol)
 
                 # Parse residue
                 residue = parse_ccd_residue(
@@ -1207,8 +1180,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 type=const.chain_type_ids["NONPOLYMER"],
                 cyclic_period=0,
                 sequence=None,
-                affinity=affinity,
-                affinity_mw=affinity_mw,
             )
 
             assert not items[0][entity_type].get(
@@ -1217,6 +1188,20 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
 
         elif (entity_type == "ligand") and ("smiles" in items[0][entity_type]):
             seq = items[0][entity_type]["smiles"]
+            ids = items[0][entity_type]["id"]
+            if isinstance(ids, str):
+                affinity = ids in affinity_ligands
+            elif isinstance(ids, list) and len(ids) == 1:
+                affinity = ids[0] in affinity_ligands
+            elif (
+                isinstance(ids, list)
+                and len(ids) > 1
+                and any(x in affinity_ligands for x in ids)
+            ):
+                msg = "Cannot compute affinity for a ligand that has multiple copies!"
+                raise ValueError(msg)
+            else:
+                affinity = False
 
             if affinity:
                 seq = standardize(seq)
@@ -1242,13 +1227,20 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 raise ValueError(msg)
 
             mol_no_h = AllChem.RemoveHs(mol, sanitize=False)
-            affinity_mw = AllChem.Descriptors.MolWt(mol_no_h) if affinity else None
-            extra_mols[f"LIG{ligand_id}"] = mol_no_h
-            residue = parse_ccd_residue(
-                name=f"LIG{ligand_id}",
-                ref_mol=mol,
-                res_idx=0,
-            )
+            if affinity:
+                extra_mols[f"AFF{ligand_id}"] = mol_no_h
+                residue = parse_ccd_residue(
+                    name=f"AFF{ligand_id}",
+                    ref_mol=mol,
+                    res_idx=0,
+                )
+            else:
+                extra_mols[f"LIG{ligand_id}"] = mol_no_h
+                residue = parse_ccd_residue(
+                    name=f"LIG{ligand_id}",
+                    ref_mol=mol,
+                    res_idx=0,
+                )
 
             ligand_id += 1
             parsed_chain = ParsedChain(
@@ -1258,7 +1250,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 cyclic_period=0,
                 sequence=None,
                 affinity=affinity,
-                affinity_mw=affinity_mw,
             )
 
             assert not items[0][entity_type].get(
@@ -1293,8 +1284,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     bond_data = []
     res_data = []
     chain_data = []
-    protein_chains = set()
-    affinity_info = None
+    polymer_chains = set()
 
     rdkit_bounds_constraint_data = []
     chiral_atom_constraint_data = []
@@ -1318,20 +1308,9 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         res_num = len(chain.residues)
         atom_num = sum(len(res.atoms) for res in chain.residues)
 
-        # Save protein chains for later
-        if chain.type == const.chain_type_ids["PROTEIN"]:
-            protein_chains.add(chain_name)
-
-        # Add affinity info
-        if chain.affinity and affinity_info is not None:
-            msg = "Cannot compute affinity for multiple ligands!"
-            raise ValueError(msg)
-
-        if chain.affinity:
-            affinity_info = AffinityInfo(
-                chain_id=asym_id,
-                mw=chain.affinity_mw,
-            )
+        # Save polymer chains (protein, RNA, DNA) for templating
+        if chain.type in [const.chain_type_ids["PROTEIN"], const.chain_type_ids["RNA"], const.chain_type_ids["DNA"]]:
+            polymer_chains.add(chain_name)
 
         # Find all copies of this chain in the assembly
         entity_id = int(chain.entity)
@@ -1348,6 +1327,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 res_idx,
                 res_num,
                 chain.cyclic_period,
+                chain.affinity,
             )
         )
         chain_to_idx[chain_name] = asym_id
@@ -1562,7 +1542,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             raise ValueError(msg)
 
     # Get protein sequences in this YAML
-    protein_seqs = {name: chains[name].sequence for name in protein_chains}
+    protein_seqs = {name: chains[name].sequence for name in polymer_chains}
 
     # Parse templates
     template_schema = schema.get("templates", [])
@@ -1605,13 +1585,13 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
 
         # Get relevant chains ids
         if chain_ids is None:
-            chain_ids = list(protein_chains)
+            chain_ids = list(polymer_chains)
 
         for chain_id in chain_ids:
-            if chain_id not in protein_chains:
+            if chain_id not in polymer_chains:
                 msg = (
                     f"Chain {chain_id} assigned for template"
-                    f"{template_id} is not one of the protein chains!"
+                    f"{template_id} is not one of the polymer chains (protein/RNA/DNA)!"
                 )
                 raise ValueError(msg)
 
@@ -1623,19 +1603,19 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             use_assembly=False,
             compute_interfaces=False,
         )
-        template_proteins = {
+        template_polymers = {
             str(c["name"])
             for c in parsed_template.data.chains
-            if c["mol_type"] == const.chain_type_ids["PROTEIN"]
+            if c["mol_type"] in [const.chain_type_ids["PROTEIN"], const.chain_type_ids["RNA"], const.chain_type_ids["DNA"]]
         }
         if template_chain_ids is None:
-            template_chain_ids = list(template_proteins)
+            template_chain_ids = list(template_polymers)
 
         for chain_id in template_chain_ids:
-            if chain_id not in template_proteins:
+            if chain_id not in template_polymers:
                 msg = (
                     f"Template chain {chain_id} assigned for template"
-                    f"{template_id} is not one of the protein chains!"
+                    f"{template_id} is not one of the polymer chains (protein/RNA/DNA)!"
                 )
                 raise ValueError(msg)
 
@@ -1739,6 +1719,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         chain_infos.append(chain_info)
 
     options = InferenceOptions(pocket_constraints=pocket_constraints)
+
     record = Record(
         id=name,
         structure=struct_info,
@@ -1746,7 +1727,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         interfaces=[],
         inference_options=options,
         templates=template_records,
-        affinity=affinity_info,
+        affinity=len(affinity_ligands) > 0,
     )
 
     residue_constraints = ResidueConstraints(

@@ -6,7 +6,9 @@ Once you have installed `boltz`, you can start making predictions by simply runn
 
 where `<INPUT_PATH>` is a path to the input file or a directory. The input file can either be in fasta (enough for most use cases) or YAML  format (for more complex inputs). If you specify a directory, `boltz` will run predictions on each `.yaml` or `.fasta` file in the directory. Passing the `--use_msa_server` flag will auto-generate the MSA using the mmseqs2 server, otherwise you can provide a precomputed MSA. 
 
-The Boltz model includes an option to use inference time potentials that significantly improve the physical quality of the poses. If you find any physical issues with the model predictions, please let us know by opening an issue and including the YAML/FASTA file to replicate, the structure output and a description of the problem. If you want to run the Boltz model with the potentials you can do so with the `--use_potentials` flag. 
+The Boltz model includes an option to use inference time potentials that significantly improve the physical quality of the poses. If you find any physical issues with the model predictions, please let us know by opening an issue and including the YAML/FASTA file to replicate, the structure output and a description of the problem. If you want to run the Boltz model with the potentials you can do so with the `--use_potentials` flag.
+
+Boltz-2 also supports **selective in-place refinement**, allowing you to refine specific regions of existing structures while keeping other parts relatively fixed. This is useful for loop refinement, binding site optimization, and conformational sampling. See the [Selective Refinement Guide](selective_refinement.md) for detailed documentation. 
 
 Before diving into more details about the input formats, here are the key differences in what they each support:
 
@@ -20,6 +22,7 @@ Before diving into more details about the input formats, here are the key differ
 | Covalent bonds | :x:                | :white_check_mark:   |
 | Pocket conditioning | :x:                | :white_check_mark:   |
 | Affinity | :x:                | :white_check_mark:   |
+| Selective Refinement | :white_check_mark: | :white_check_mark:   |
 
 
 
@@ -78,7 +81,7 @@ The `modifications` field is an optional field that allows you to specify modifi
 
 * The `pocket` constraint specifies the residues associated with a ligand, where `binder` refers to the chain binding to the pocket (which can be a molecule, protein, DNA or RNA) and `contacts` is the list of chain and residue indices (starting from 1) associated with the pocket. The model currently only supports the specification of a single `binder` chain (and any number of `contacts` residues in other chains).
 
-`templates` is an otional field that allows you to specify structural templates for your prediction. At minimum, you must provide the path to the structural template, which must provided as a CIF file. If you wish to explicitely define which of the chains in your YAML should be templated using this CIF file, you can use the `chain_id` entry to specify them. Whether a set of ids is provided or not, Boltz will find the best matching chains from the provided template. If you wish to explicitely define the mapping yourself, you may provide the corresponding template_id. Note that only protein chains can be templated.
+`templates` is an otional field that allows you to specify structural templates for your prediction. At minimum, you must provide the path to the structural template, which must provided as a CIF file. If you wish to explicitely define which of the chains in your YAML should be templated using this CIF file, you can use the `chain_id` entry to specify them. Whether a set of ids is provided or not, Boltz will find the best matching chains from the provided template. If you wish to explicitely define the mapping yourself, you may provide the corresponding template_id. Templating is supported for protein, RNA, and DNA polymer chains.
 
 `properties` is an optional field that allows you to specify whether you want to compute the affinity. If enabled, you must also provide the chain_id corresponding to the small molecule against which the affinity will be computed.
 
@@ -233,19 +236,12 @@ The output confidence `.json` file contains various aggregated confidence scores
 The output affinity `.json` file is organized as follows:
 ```yaml
 {
-    "affinity_pred_value": 0.8367,             # Predicted binding affinity from the enseble model
+    "affinity_pred_value": 0.8367,             # Predicted binding affinity (pIC50) from the enseble model
     "affinity_probability_binary": 0.8425,     # Predicted binding likelihood from the ensemble model
-    "affinity_pred_value1": 0.8225,            # Predicted binding affinity from the first model of the ensemble
+    "affinity_pred_value1": 0.8225,            # Predicted binding affinity (pIC50) from the first model of the ensemble
     "affinity_probability_binary1": 0.0,       # Predicted binding likelihood from the first model in the ensemble
-    "affinity_pred_value2": 0.8225,            # Predicted binding affinity from the second model of the ensemble
+    "affinity_pred_value2": 0.8225,            # Predicted binding affinity (pIC50) from the second model of the ensemble
     "affinity_probability_binary2": 0.8402,    # Predicted binding likelihood from the second model in the ensemble
 }
 ```
-The `affinity_pred_value`, `affinity_pred_value1`, and `affinity_pred_value2` fields report a binding affinity value as `log(IC50)`, derived from an `IC50` measured in `μM`. Lower values indicate stronger predicted binding, for instance:
-- IC50 of $10^{-9}$ M $\longrightarrow$ our model outputs $-3$ (strong binder)
-- IC50 of $10^{-6}$ M $\longrightarrow$ our model outputs $0$ (moderate binder)
-- IC50 of $10^{-4}$ M $\longrightarrow$ our model outputs $2$ (weak binder / decoy)
-
-You can convert the model's output to pIC50 in `kcal/mol` by using `y --> (6 - y) * 1.364` where `y` is the model's prediction.
-
-The `affinity_probability_binary`, `affinity_probability_binary1` and `affinity_probability_binary2` fields range from 0 to 1 and represent the predicted probability that the ligand is a binder.
+The `affinity_pred_value`, `affinity_pred_value1`, and `affinity_pred_value2` fields report binding affinity in pIC50, derived from IC50 values measured in μM, and lower values indicate stronger predicted binding. The `affinity_probability_binary`, `affinity_probability_binary1` and `affinity_probability_binary2` fields range from 0 to 1 and represent the predicted probability that the ligand is a binder.

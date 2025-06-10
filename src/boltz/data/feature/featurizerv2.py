@@ -2167,7 +2167,9 @@ class Boltz2Featurizer:
         # Compute affinity ligand Molecular Weight
         ligand_to_mw = {}
         if compute_affinity:
-            ligand_to_mw["affinity_mw"] = data.record.affinity.mw
+            for key, molecule in molecules.items():
+                if key.startswith("AFF"):
+                    ligand_to_mw["affinity_mw"] = rdkit.Chem.Descriptors.MolWt(molecule)
 
         # Compute template features
         num_tokens = data.tokens.shape[0] if max_tokens is None else max_tokens
@@ -2205,4 +2207,5 @@ class Boltz2Featurizer:
             **residue_constraint_features,
             **chain_constraint_features,
             **ligand_to_mw,
+            "structure": data.structure,  # Add structure for selective refinement
         }

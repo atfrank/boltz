@@ -930,6 +930,52 @@ def cli() -> None:
     is_flag=True,
     help="Whether to not use trifast kernels for triangular updates. Default False",
 )
+@click.option(
+    "--init_coords",
+    type=click.Path(exists=True),
+    help="Path to PDB/mmCIF file with initial coordinates for selective refinement.",
+    default=None,
+)
+@click.option(
+    "--add_noise",
+    type=str,
+    multiple=True,
+    help="Add targeted noise to specific atoms/residues/chains. Format: 'chain:A:1.0', 'resid:A:10:0.5', 'atom:A:5:CA:2.0', 'distance:A:1:5.0:1.5'.",
+    default=(),
+)
+@click.option(
+    "--start_sigma_scale",
+    type=float,
+    help="Scale factor for initial sigma when using --init_coords. Default is 1.0 (full noise). Set lower (e.g., 0.1) for less initial noise.",
+    default=1.0,
+)
+@click.option(
+    "--no_random_augmentation",
+    is_flag=True,
+    help="Disable random rotation and translation during denoising when using --init_coords.",
+)
+@click.option(
+    "--non_target_noise_min",
+    type=float,
+    help="Minimum noise scale for non-targeted atoms (a in a + b * step_progress). Default is 0.1.",
+    default=0.1,
+)
+@click.option(
+    "--non_target_noise_range",
+    type=float,
+    help="Noise scale range for non-targeted atoms (b in a + b * step_progress). Default is 0.2.",
+    default=0.2,
+)
+@click.option(
+    "--residue_based_selection",
+    is_flag=True,
+    help="When using distance-based noise, select entire residues if any atom is within distance (default: select individual atoms).",
+)
+@click.option(
+    "--save_trajectory",
+    is_flag=True,
+    help="Save trajectory showing structure after each denoising step as multi-model file. Default is False.",
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -963,6 +1009,14 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     subsample_msa: bool = True,
     num_subsampled_msa: int = 1024,
     no_trifast: bool = False,
+    init_coords: Optional[str] = None,
+    add_noise: tuple[str, ...] = (),
+    start_sigma_scale: float = 1.0,
+    no_random_augmentation: bool = False,
+    non_target_noise_min: float = 0.1,
+    non_target_noise_range: float = 0.2,
+    residue_based_selection: bool = False,
+    save_trajectory: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1160,7 +1214,31 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             "write_confidence_summary": True,
             "write_full_pae": write_full_pae,
             "write_full_pde": write_full_pde,
+            "save_trajectory": save_trajectory,
         }
+        
+        # Add init_coords to predict_args if provided
+        if init_coords:
+            init_coords_path = Path(init_coords).expanduser()
+            click.echo(f"Using initial coordinates from {init_coords_path}")
+            predict_args["init_coords_path"] = str(init_coords_path)
+            
+        # Add noise specifications to predict_args if provided
+        if add_noise:
+            click.echo(f"Adding noise to selections: {list(add_noise)}")
+            predict_args["noise_specs"] = list(add_noise)
+            predict_args["non_target_noise_min"] = non_target_noise_min
+            predict_args["non_target_noise_range"] = non_target_noise_range
+            predict_args["start_sigma_scale"] = start_sigma_scale
+            predict_args["no_random_augmentation"] = no_random_augmentation
+            predict_args["residue_based_selection"] = residue_based_selection
+            click.echo(f"Non-target noise scaling: {non_target_noise_min} + {non_target_noise_range} * step_progress")
+            if start_sigma_scale != 1.0:
+                click.echo(f"Initial sigma scaled by: {start_sigma_scale}")
+            if no_random_augmentation:
+                click.echo("Random augmentation disabled")
+            if residue_based_selection:
+                click.echo("Residue-based selection enabled for distance noise")
 
         steering_args = BoltzSteeringParams()
         if not use_potentials:

@@ -1,0 +1,10 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCGGAGGAAUUGGGGUCC  # Example 19-nt RNA sequence
+      msa: empty  # Use single sequence mode for simplicity
+templates:
+  - cif: examples/rna_template.cif  # Would need an RNA structure file
+    chain_id: A
+    template_id: A

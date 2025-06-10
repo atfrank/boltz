@@ -519,6 +519,29 @@ class Boltz2(LightningModule):
                     "token_trans_bias": token_trans_bias,
                 }
 
+                # Get init_coords_path and other refinement params from predict_args if they exist
+                init_coords_path = None
+                noise_specs = None
+                save_trajectory = False
+                non_target_noise_min = 0.1
+                non_target_noise_range = 0.2
+                start_sigma_scale = 1.0
+                no_random_augmentation = False
+                residue_based_selection = False
+                
+                if (not self.training) and self.predict_args is not None:
+                    init_coords_path = self.predict_args.get("init_coords_path", None)
+                    noise_specs = self.predict_args.get("noise_specs", None)
+                    save_trajectory = self.predict_args.get("save_trajectory", False)
+                    non_target_noise_min = self.predict_args.get("non_target_noise_min", 0.1)
+                    non_target_noise_range = self.predict_args.get("non_target_noise_range", 0.2)
+                    start_sigma_scale = self.predict_args.get("start_sigma_scale", 1.0)
+                    no_random_augmentation = self.predict_args.get("no_random_augmentation", False)
+                    residue_based_selection = self.predict_args.get("residue_based_selection", False)
+                
+                # Extract structure separately
+                structure = feats.get("structure", None)
+                
                 with torch.autocast("cuda", enabled=False):
                     struct_out = self.structure_module.sample(
                         s_trunk=s.float(),
@@ -530,6 +553,15 @@ class Boltz2(LightningModule):
                         max_parallel_samples=max_parallel_samples,
                         steering_args=self.steering_args,
                         diffusion_conditioning=diffusion_conditioning,
+                        init_coords_path=init_coords_path,
+                        noise_specs=noise_specs,
+                        structure=structure,
+                        save_trajectory=save_trajectory,
+                        non_target_noise_min=non_target_noise_min,
+                        non_target_noise_range=non_target_noise_range,
+                        start_sigma_scale=start_sigma_scale,
+                        no_random_augmentation=no_random_augmentation,
+                        residue_based_selection=residue_based_selection,
                     )
                     dict_out.update(struct_out)
 
@@ -1066,6 +1098,11 @@ class Boltz2(LightningModule):
                 for key in self.predict_args["keys_dict_out"]:
                     pred_dict[key] = out[key]
             pred_dict["coords"] = out["sample_atom_coords"]
+            
+            # Add trajectory if available
+            if "trajectory_coords" in out:
+                pred_dict["trajectory_coords"] = out["trajectory_coords"]
+            
             if self.confidence_prediction:
                 # pred_dict["confidence"] = out.get("ablation_confidence", None)
                 pred_dict["pde"] = out["pde"]

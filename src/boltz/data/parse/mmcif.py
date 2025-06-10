@@ -866,6 +866,11 @@ def parse_mmcif(  # noqa: C901, PLR0915, PLR0912
     # Create mapping from chain, residue to subchains
     # since a Connection uses the chains and not subchins
     subchain_map = {}
+    
+    # Check if structure has models
+    if len(structure) == 0:
+        raise ValueError(f"Structure from {path} has no models after cleanup.")
+    
     for chain in structure[0]:
         for residue in chain:
             seq_id = residue.seqid

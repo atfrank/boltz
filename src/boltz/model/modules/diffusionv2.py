@@ -299,6 +299,15 @@ class AtomDiffusion(Module):
         multiplicity=1,
         max_parallel_samples=None,
         steering_args=None,
+        init_coords_path=None,
+        noise_specs=None,
+        structure=None,
+        save_trajectory=False,
+        non_target_noise_min=0.1,
+        non_target_noise_range=0.2,
+        start_sigma_scale=1.0,
+        no_random_augmentation=False,
+        residue_based_selection=False,
         **network_condition_kwargs,
     ):
         potentials = get_potentials()
@@ -324,6 +333,11 @@ class AtomDiffusion(Module):
 
         # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
         sigmas = self.sample_schedule(num_sampling_steps)
+        
+        # Scale entire sigma schedule if using init_coords
+        if init_coords_path is not None and start_sigma_scale != 1.0:
+            sigmas = sigmas * start_sigma_scale
+            
         gammas = torch.where(sigmas > self.gamma_min, self.gamma_0, 0.0)
         sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[1:]))
         if self.training and self.step_scale_random is not None:
@@ -331,17 +345,138 @@ class AtomDiffusion(Module):
         else:
             step_scale = self.step_scale
 
-        # atom position is noise at the beginning
+        # Initialize atom coordinates
         init_sigma = sigmas[0]
-        atom_coords = init_sigma * torch.randn(shape, device=self.device)
+        
+        if init_coords_path is not None:
+            # Import needed for PDB/mmCIF parsing
+            from boltz.data.write.utils import read_coords_from_file
+            
+            try:
+                # Read the coordinates from the PDB/mmCIF file
+                expected_atoms = shape[1]
+                init_coords = read_coords_from_file(init_coords_path, expected_atoms)
+                
+                if init_coords is not None:
+                    # Create tensor and expand for batch
+                    init_coords_tensor = torch.tensor(init_coords, dtype=torch.float32)
+                    if torch.cuda.is_available() and next(self.parameters()).is_cuda:
+                        init_coords_tensor = init_coords_tensor.to(self.device)
+                    
+                    # Reshape to match expected dimensions
+                    init_coords_tensor = init_coords_tensor.unsqueeze(0)
+                    init_coords_tensor = init_coords_tensor.expand(shape[0], -1, -1)
+                    
+                    # Use initial coordinates without adding global noise
+                    atom_coords = init_coords_tensor
+                    print(f"Using initial coordinates from {init_coords_path}")
+                else:
+                    print(f"Warning: Failed to load coordinates from {init_coords_path}")
+                    print("Using random initialization instead.")
+                    atom_coords = init_sigma * torch.randn(shape, device=self.device)
+            except Exception as e:
+                print(f"Error loading initial coordinates: {e}. Using random initialization instead.")
+                atom_coords = init_sigma * torch.randn(shape, device=self.device)
+        else:
+            # Original code for random initialization
+            atom_coords = init_sigma * torch.randn(shape, device=self.device)
+        
+        # Setup selective denoising variables
+        use_selective_denoising = init_coords_path is not None
+        targeted_atoms_mask = None
+        
+        # Show selective refinement info even if structure is None
+        if init_coords_path is not None or noise_specs:
+            print(f"")
+            print(f"=== SELECTIVE REFINEMENT PARAMETERS ===")
+            print(f"Init coordinates: {init_coords_path}")
+            print(f"Noise specifications: {noise_specs}")
+            print(f"Start sigma scale: {start_sigma_scale}")
+            print(f"Random augmentation: {'disabled' if no_random_augmentation else 'enabled'}")
+            print(f"Residue-based selection: {'enabled' if residue_based_selection else 'disabled'}")
+            print(f"Non-target noise min: {non_target_noise_min}")
+            print(f"Non-target noise range: {non_target_noise_range}")
+            print(f"Structure available: {'yes' if structure is not None else 'no'}")
+            print(f"========================================")
+            print(f"")
+        
+        # Apply selective noise if specified
+        if noise_specs:
+            try:
+                from boltz.data.noise import parse_noise_specifications, apply_noise_to_selection
+                
+                # Parse noise specifications
+                parsed_noise_specs = parse_noise_specifications(noise_specs)
+                print(f"Parsed {len(parsed_noise_specs)} noise specifications")
+                
+                if structure is not None:
+                    # Handle structure being a list (batch dimension)
+                    if isinstance(structure, list) and len(structure) > 0:
+                        structure_obj = structure[0]  # Use first structure in batch
+                    else:
+                        structure_obj = structure
+                    
+                    if structure_obj is not None:
+                        # First apply global centering to maintain coherence
+                        atom_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
+                        
+                        # Then apply targeted noise
+                        atom_coords, targeted_atoms_mask = apply_noise_to_selection(
+                            atom_coords, parsed_noise_specs, structure_obj, self.device,
+                            residue_based=residue_based_selection
+                        )
+                        total_atoms = targeted_atoms_mask.shape[1]
+                        targeted_count = targeted_atoms_mask.sum().item()
+                        non_targeted_count = total_atoms - targeted_count
+                        percentage_targeted = (targeted_count / total_atoms) * 100 if total_atoms > 0 else 0
+                        
+                        print(f"")
+                        print(f"=== SELECTIVE REFINEMENT SUMMARY ===")
+                        print(f"Total atoms: {total_atoms}")
+                        print(f"Targeted atoms: {targeted_count} ({percentage_targeted:.1f}%)")
+                        print(f"Non-targeted atoms: {non_targeted_count} ({100-percentage_targeted:.1f}%)")
+                        print(f"Residue-based selection: {'enabled' if residue_based_selection else 'disabled'}")
+                        print(f"Random augmentation: {'disabled' if no_random_augmentation else 'enabled'}")
+                        print(f"Noise specifications: {len(parsed_noise_specs)}")
+                        print(f"=====================================")
+                        print(f"")
+                        
+                        # Expand mask to match coordinate batch size (multiplicity)
+                        if targeted_atoms_mask.shape[0] != atom_coords.shape[0]:
+                            targeted_atoms_mask = targeted_atoms_mask.expand(atom_coords.shape[0], -1)
+                    else:
+                        print("Warning: Structure object is None, cannot apply selective noise")
+                else:
+                    print("Warning: Structure not available in feats, cannot apply selective noise")
+                    print("Note: Atom selection information will not be shown")
+                    # At least show what we tried to parse
+                    for i, spec in enumerate(parsed_noise_specs):
+                        print(f"  Specification {i+1}: {spec.selection_type} - {spec}")
+            except Exception as e:
+                print(f"Warning: Failed to apply selective noise: {e}")
+                import traceback
+                traceback.print_exc()
         token_repr = None
         atom_coords_denoised = None
+        
+        # Initialize trajectory storage
+        trajectory_coords = []
+        if save_trajectory:
+            # Store initial coordinates (centered and first batch element only)
+            centered_initial = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
+            trajectory_coords.append(centered_initial[0:1].clone().cpu())
 
         # gradually denoise
         for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(sigmas_and_gammas):
-            random_R, random_tr = compute_random_augmentation(
-                multiplicity, device=atom_coords.device, dtype=atom_coords.dtype
-            )
+            # Skip random augmentation if requested
+            if no_random_augmentation and init_coords_path is not None:
+                # Use identity rotation and zero translation
+                random_R = torch.eye(3, device=atom_coords.device, dtype=atom_coords.dtype).unsqueeze(0).expand(multiplicity, -1, -1)
+                random_tr = torch.zeros((multiplicity, 1, 3), device=atom_coords.device, dtype=atom_coords.dtype)
+            else:
+                random_R, random_tr = compute_random_augmentation(
+                    multiplicity, device=atom_coords.device, dtype=atom_coords.dtype
+                )
             atom_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
             atom_coords = (
                 torch.einsum("bmd,bds->bms", atom_coords, random_R) + random_tr
@@ -363,6 +498,29 @@ class AtomDiffusion(Module):
             steering_t = 1.0 - (step_idx / num_sampling_steps)
             noise_var = self.noise_scale**2 * (t_hat**2 - sigma_tm**2)
             eps = sqrt(noise_var) * torch.randn(shape, device=self.device)
+            
+            # Apply differential noise scaling if using targeted denoising
+            if use_selective_denoising and targeted_atoms_mask is not None:
+                # Create noise scaling mask
+                noise_scale = torch.ones_like(targeted_atoms_mask, dtype=torch.float32)
+                
+                # Targeted atoms get full noise (scale = 1.0)
+                # Non-targeted atoms get reduced noise based on provided parameters
+                step_progress = step_idx / num_sampling_steps
+                non_target_scale = non_target_noise_min + non_target_noise_range * step_progress
+                noise_scale[~targeted_atoms_mask] = non_target_scale
+                
+                # Log differential noise scaling every 10 steps or at key points
+                if step_idx == 0 or step_idx % 10 == 0 or step_idx == num_sampling_steps - 1:
+                    targeted_count = targeted_atoms_mask.sum().item()
+                    non_targeted_count = (~targeted_atoms_mask).sum().item()
+                    print(f"Step {step_idx+1}/{num_sampling_steps}: Noise scaling - Targeted: 1.0 ({targeted_count} atoms), Non-targeted: {non_target_scale:.3f} ({non_targeted_count} atoms)")
+                
+                # Expand to match coordinate dimensions and apply scaling
+                noise_scale_expanded = noise_scale.unsqueeze(-1).expand_as(eps)
+                eps = eps * noise_scale_expanded
+            
+            # Apply noise to entire system (maintains physical coherence)
             atom_coords_noisy = atom_coords + eps
 
             with torch.no_grad():
@@ -404,7 +562,7 @@ class AtomDiffusion(Module):
                     energy_traj = torch.cat((energy_traj, energy.unsqueeze(1)), dim=1)
 
                     # Compute log G values
-                    if step_idx == 0:
+                    if step_idx == 0 or energy_traj.shape[1] < 2:
                         log_G = -1 * energy
                     else:
                         log_G = energy_traj[:, -2] - energy_traj[:, -1]
@@ -508,8 +666,24 @@ class AtomDiffusion(Module):
             )
 
             atom_coords = atom_coords_next
+            
+            # Save trajectory step if requested (after centering like final coordinates)
+            if save_trajectory:
+                # Center coordinates like final output and store only first batch element
+                centered_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
+                trajectory_coords.append(centered_coords[0:1].clone().cpu())
 
-        return dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
+        # Prepare output dictionary
+        output_dict = dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
+        
+        # Add trajectory if saved
+        if save_trajectory and trajectory_coords:
+            # Stack trajectory frames
+            trajectory_tensor = torch.cat(trajectory_coords, dim=0)
+            output_dict['trajectory_coords'] = trajectory_tensor
+            print(f"Saved trajectory with {len(trajectory_coords)} steps")
+        
+        return output_dict
 
     def loss_weight(self, sigma):
         return (sigma**2 + self.sigma_data**2) / ((sigma * self.sigma_data) ** 2)
