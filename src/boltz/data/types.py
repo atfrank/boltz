@@ -523,6 +523,13 @@ class InferenceOptions:
     """InferenceOptions datatype."""
 
     pocket_constraints: Optional[list[tuple[int, list[tuple[int, int]], float]]] = None
+    
+    # CUDA optimization flags
+    use_cuda_optimizations: bool = True
+    use_vectorized_saxs: bool = True
+    use_optimized_rg: bool = True
+    use_batch_finite_diff: bool = True
+    enable_mixed_precision: bool = True
 
 
 @dataclass(frozen=True)

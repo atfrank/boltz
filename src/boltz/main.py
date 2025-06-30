@@ -27,7 +27,7 @@ from boltz.data.parse.a3m import parse_a3m
 from boltz.data.parse.csv import parse_csv
 from boltz.data.parse.fasta import parse_fasta
 from boltz.data.parse.yaml import parse_yaml
-from boltz.data.types import MSA, Manifest, Record
+from boltz.data.types import MSA, Manifest, Record, InferenceOptions
 from boltz.data.write.writer import BoltzAffinityWriter, BoltzWriter
 from boltz.model.models.boltz1 import Boltz1
 from boltz.model.models.boltz2 import Boltz2
@@ -1017,6 +1017,31 @@ def cli() -> None:
     is_flag=True,
     help="Save trajectory showing structure after each denoising step as multi-model file. Default is False.",
 )
+@click.option(
+    "--no_cuda_optimizations",
+    is_flag=True,
+    help="Disable CUDA optimizations (use original code paths for comparison). Default is False.",
+)
+@click.option(
+    "--no_vectorized_saxs",
+    is_flag=True,
+    help="Disable vectorized SAXS computation. Default is False.",
+)
+@click.option(
+    "--no_optimized_rg",
+    is_flag=True,
+    help="Disable optimized Rg calculations. Default is False.",
+)
+@click.option(
+    "--no_batch_finite_diff",
+    is_flag=True,
+    help="Disable batch finite difference gradients. Default is False.",
+)
+@click.option(
+    "--no_mixed_precision",
+    is_flag=True,
+    help="Disable mixed precision optimizations. Default is False.",
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -1058,6 +1083,11 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     non_target_noise_range: float = 0.2,
     residue_based_selection: bool = False,
     save_trajectory: bool = False,
+    no_cuda_optimizations: bool = False,
+    no_vectorized_saxs: bool = False,
+    no_optimized_rg: bool = False,
+    no_batch_finite_diff: bool = False,
+    no_mixed_precision: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1285,6 +1315,33 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         if not use_potentials:
             steering_args.fk_steering = False
             steering_args.guidance_update = False
+
+        # Create inference options with CUDA optimization flags
+        inference_options = InferenceOptions(
+            use_cuda_optimizations=not no_cuda_optimizations,
+            use_vectorized_saxs=not no_vectorized_saxs,
+            use_optimized_rg=not no_optimized_rg,
+            use_batch_finite_diff=not no_batch_finite_diff,
+            enable_mixed_precision=not no_mixed_precision,
+        )
+        
+        # Log optimization settings
+        if not no_cuda_optimizations:
+            click.echo("CUDA optimizations: ENABLED")
+            if not no_vectorized_saxs:
+                click.echo("  ✓ Vectorized SAXS computation")
+            if not no_optimized_rg:
+                click.echo("  ✓ Optimized Rg calculations")
+            if not no_batch_finite_diff:
+                click.echo("  ✓ Batch finite difference gradients")
+            if not no_mixed_precision:
+                click.echo("  ✓ Mixed precision optimizations")
+        else:
+            click.echo("CUDA optimizations: DISABLED (using original code paths)")
+            
+        # Store optimization flags globally for access by potentials
+        import boltz.model.potentials.optimizations as opt_flags
+        opt_flags.INFERENCE_OPTIONS = inference_options
 
         model_cls = Boltz2 if model == "boltz2" else Boltz1
         model_module = model_cls.load_from_checkpoint(

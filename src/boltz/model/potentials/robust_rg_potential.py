@@ -10,6 +10,9 @@ import numpy as np
 from typing import Optional, Union, Tuple
 from boltz.model.potentials.rg_potential import RadiusOfGyrationPotential
 
+# Import optimization flags
+from boltz.model.potentials.optimizations import use_optimized_rg
+
 
 class RobustRgPotential(RadiusOfGyrationPotential):
     """Enhanced Rg potential with multiple safeguards against extreme atom displacement."""
@@ -94,6 +97,59 @@ class RobustRgPotential(RadiusOfGyrationPotential):
         progress = self.step_count / self.ramping_steps
         current_k = self.min_force_constant + progress * (self.original_force_constant - self.min_force_constant)
         return current_k
+    
+    def _compute_robust_stats_optimized(self, distances: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute robust statistics without using torch.median (differentiable approximation).
+        
+        Args:
+            distances: [n_atoms] distance from center of mass
+            
+        Returns:
+            median_approx: Approximation of median distance
+            mad_approx: Approximation of median absolute deviation
+        """
+        # Use differentiable quantile approximations instead of exact median
+        # This allows gradient flow while providing similar robustness
+        
+        # Sort distances for quantile computation
+        sorted_distances, _ = torch.sort(distances)
+        n = sorted_distances.shape[0]
+        
+        # Compute approximate median using weighted average around 50th percentile
+        # This is differentiable unlike torch.median
+        mid_idx = n // 2
+        if n % 2 == 0:
+            median_approx = (sorted_distances[mid_idx-1] + sorted_distances[mid_idx]) * 0.5
+        else:
+            median_approx = sorted_distances[mid_idx]
+        
+        # Compute MAD approximation
+        abs_deviations = torch.abs(distances - median_approx)
+        sorted_abs_dev, _ = torch.sort(abs_deviations)
+        mid_idx_dev = abs_deviations.shape[0] // 2
+        if abs_deviations.shape[0] % 2 == 0:
+            mad_approx = (sorted_abs_dev[mid_idx_dev-1] + sorted_abs_dev[mid_idx_dev]) * 0.5
+        else:
+            mad_approx = sorted_abs_dev[mid_idx_dev]
+        
+        return median_approx, mad_approx
+    
+    def _compute_robust_stats_quantile(self, distances: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute robust statistics using torch.quantile (GPU-optimized).
+        
+        Args:
+            distances: [n_atoms] distance from center of mass
+            
+        Returns:
+            median_approx: 50th percentile of distances
+            mad_approx: 50th percentile of absolute deviations
+        """
+        # Use torch.quantile which is GPU-optimized and differentiable
+        median_approx = torch.quantile(distances, 0.5)
+        abs_deviations = torch.abs(distances - median_approx)
+        mad_approx = torch.quantile(abs_deviations, 0.5)
+        
+        return median_approx, mad_approx
     
     def compute_gradient_friendly_rg(self, coords: torch.Tensor, masses: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Compute radius of gyration in a gradient-friendly way (no median operations).
@@ -242,8 +298,13 @@ class RobustRgPotential(RadiusOfGyrationPotential):
         elif self.rg_calculation_method == "robust":
             # Robust Rg calculation using Median Absolute Deviation (MAD)
             distances = torch.sqrt(distances_sq)
-            median_dist = torch.median(distances)
-            mad = torch.median(torch.abs(distances - median_dist))
+            
+            # Use optimized robust statistics computation if enabled
+            if use_optimized_rg():
+                median_dist, mad = self._compute_robust_stats_quantile(distances)
+            else:
+                median_dist = torch.median(distances)
+                mad = torch.median(torch.abs(distances - median_dist))
             
             # Identify outliers using robust threshold
             threshold = median_dist + self.outlier_threshold * mad * 1.4826  # 1.4826 makes MAD consistent with std
@@ -427,8 +488,12 @@ class RobustRgPotential(RadiusOfGyrationPotential):
         distances = torch.sqrt(distances_sq)
         
         if self.rg_calculation_method == "robust":
-            median_dist = torch.median(distances)
-            mad = torch.median(torch.abs(distances - median_dist))
+            # Use optimized robust statistics computation if enabled
+            if use_optimized_rg():
+                median_dist, mad = self._compute_robust_stats_quantile(distances)
+            else:
+                median_dist = torch.median(distances)
+                mad = torch.median(torch.abs(distances - median_dist))
             threshold = median_dist + self.outlier_threshold * mad * 1.4826
             valid_atoms = distances <= threshold
         elif self.rg_calculation_method == "trimmed":

@@ -6,6 +6,9 @@ import numpy as np
 import torch
 from typing import Optional, Union
 
+# Import optimization flags
+from boltz.model.potentials.optimizations import use_vectorized_saxs
+
 # Import JAX for true analytical gradients
 try:
     import jax
@@ -204,6 +207,160 @@ else:
         raise RuntimeError("JAX not available - cannot compute analytical gradients")
 
 
+# ============================================================================
+# OPTIMIZED PYTORCH-BASED SAXS COMPUTATION
+# ============================================================================
+
+def compute_form_factors_torch(q_values: torch.Tensor, atom_types: torch.Tensor) -> torch.Tensor:
+    """Compute atomic form factors using PyTorch with vectorized operations.
+    
+    Args:
+        q_values: [n_q] q-space values
+        atom_types: [n_atoms] atomic numbers
+        
+    Returns:
+        form_factors: [n_q, n_atoms] atomic form factors
+    """
+    # Simplified form factors for common atom types (C, N, O, P)
+    # Using single Gaussian approximation: f(q) = a * exp(-b * q^2)
+    
+    device = q_values.device
+    dtype = q_values.dtype
+    
+    # Known atom types and their parameters
+    atom_type_map = torch.tensor([1, 6, 7, 8, 15, 16], device=device, dtype=torch.long)  # H, C, N, O, P, S
+    a_values = torch.tensor([1.0, 6.0, 7.0, 8.0, 15.0, 16.0], device=device, dtype=dtype)  # Electron counts
+    b_values = torch.tensor([0.1, 0.2, 0.2, 0.2, 0.3, 0.3], device=device, dtype=dtype)    # B-factors
+    
+    # Default to carbon for unknown types
+    default_a, default_b = 6.0, 0.2
+    
+    # Map atom types to parameters
+    n_atoms = atom_types.shape[0]
+    a_mapped = torch.full((n_atoms,), default_a, device=device, dtype=dtype)
+    b_mapped = torch.full((n_atoms,), default_b, device=device, dtype=dtype)
+    
+    for i, atom_type in enumerate(atom_type_map):
+        mask = (atom_types == atom_type)
+        a_mapped[mask] = a_values[i]
+        b_mapped[mask] = b_values[i]
+    
+    # Vectorized form factor computation: f(q) = a * exp(-b * q^2)
+    # Shape: [n_q, 1] * [1, n_atoms] → [n_q, n_atoms]
+    q_squared = q_values[:, None] ** 2  # [n_q, 1]
+    b_expanded = b_mapped[None, :]      # [1, n_atoms]
+    a_expanded = a_mapped[None, :]      # [1, n_atoms]
+    
+    # Numerical stability - clip q^2 to prevent extreme exponentials
+    q_squared_clipped = torch.clamp(q_squared * b_expanded, max=100.0)
+    form_factors = a_expanded * torch.exp(-q_squared_clipped)
+    
+    return form_factors
+
+
+def compute_saxs_intensity_torch(coords: torch.Tensor, q_values: torch.Tensor, 
+                                form_factors: torch.Tensor) -> torch.Tensor:
+    """Compute SAXS intensity using vectorized Debye equation in PyTorch.
+    
+    Args:
+        coords: [n_atoms, 3] atomic coordinates
+        q_values: [n_q] q-space values  
+        form_factors: [n_q, n_atoms] atomic form factors
+        
+    Returns:
+        intensity: [n_q] computed SAXS intensities
+    """
+    n_atoms = coords.shape[0]
+    n_q = q_values.shape[0]
+    
+    # Compute pairwise distances - memory efficient version
+    # coords: [n_atoms, 3] → [n_atoms, 1, 3] - [1, n_atoms, 3] → [n_atoms, n_atoms, 3]
+    diff = coords[:, None, :] - coords[None, :, :]  # [n_atoms, n_atoms, 3]
+    distances = torch.norm(diff, dim=-1)  # [n_atoms, n_atoms]
+    
+    # Vectorized Debye equation: I(q) = Σ_i Σ_j f_i(q) * f_j(q) * sinc(q * r_ij)
+    # q_values: [n_q] → [n_q, 1, 1]  
+    # distances: [n_atoms, n_atoms] → [1, n_atoms, n_atoms]
+    q_r = q_values[:, None, None] * distances[None, :, :]  # [n_q, n_atoms, n_atoms]
+    
+    # Compute sinc(qr) = sin(qr) / (qr) using PyTorch's built-in sinc function
+    # PyTorch sinc is sinc(x) = sin(πx)/(πx), so we need sinc(qr/π)
+    sinc_qr = torch.sinc(q_r / torch.pi)  # [n_q, n_atoms, n_atoms]
+    
+    # Form factor outer products: f_i * f_j
+    # form_factors: [n_q, n_atoms] → f_outer: [n_q, n_atoms, n_atoms]
+    f_outer = form_factors[:, :, None] * form_factors[:, None, :]  # [n_q, n_atoms, n_atoms]
+    
+    # Final intensity calculation
+    intensity = torch.sum(f_outer * sinc_qr, dim=(1, 2))  # [n_q]
+    
+    return intensity
+
+
+def compute_saxs_chi2_torch(coords: torch.Tensor, q_exp: torch.Tensor, I_exp: torch.Tensor,
+                           sigma_exp: torch.Tensor, atom_types: torch.Tensor) -> torch.Tensor:
+    """Compute SAXS chi-squared using optimized PyTorch operations.
+    
+    Args:
+        coords: [n_atoms, 3] atomic coordinates
+        q_exp: [n_q] experimental q values
+        I_exp: [n_q] experimental intensities
+        sigma_exp: [n_q] experimental errors
+        atom_types: [n_atoms] atomic numbers
+        
+    Returns:
+        chi2: scalar chi-squared value
+    """
+    device = coords.device
+    dtype = coords.dtype
+    EPS = 1e-8
+    
+    # Compute form factors
+    form_factors = compute_form_factors_torch(q_exp, atom_types)  # [n_q, n_atoms]
+    
+    # Compute theoretical intensity
+    I_calc = compute_saxs_intensity_torch(coords, q_exp, form_factors)  # [n_q]
+    
+    # Numerical stability
+    I_calc = torch.clamp(I_calc, min=EPS)
+    
+    # Optimal scaling using weighted least squares (vectorized)
+    weights = 1.0 / torch.clamp(sigma_exp**2, min=EPS)  # [n_q]
+    
+    # Set up normal equations for weighted least squares
+    # We solve: [sum(w*I_calc^2)  sum(w*I_calc)] [scale] = [sum(w*I_exp*I_calc)]
+    #           [sum(w*I_calc)    sum(w)       ] [shift]   [sum(w*I_exp)       ]
+    
+    sum_w = torch.sum(weights)
+    sum_w_I_calc = torch.sum(weights * I_calc)
+    sum_w_I_calc2 = torch.sum(weights * I_calc**2)
+    sum_w_I_exp = torch.sum(weights * I_exp)
+    sum_w_I_exp_I_calc = torch.sum(weights * I_exp * I_calc)
+    
+    # Solve 2x2 system using Cramer's rule
+    det = sum_w_I_calc2 * sum_w - sum_w_I_calc**2
+    det = torch.clamp(torch.abs(det), min=EPS)
+    
+    scale = (sum_w_I_exp_I_calc * sum_w - sum_w_I_exp * sum_w_I_calc) / det
+    shift = (sum_w_I_calc2 * sum_w_I_exp - sum_w_I_exp_I_calc * sum_w_I_calc) / det
+    
+    # Clip to reasonable ranges
+    scale = torch.clamp(scale, 1e-6, 1e6)
+    shift = torch.clamp(shift, -1e6, 1e6)
+    
+    # Apply scaling and compute chi-squared
+    I_calc_fitted = scale * I_calc + shift
+    sigma_safe = torch.clamp(sigma_exp, min=EPS)
+    residuals = (I_exp - I_calc_fitted) / sigma_safe
+    residuals = torch.clamp(residuals, -1e3, 1e3)
+    chi2 = torch.sum(residuals**2)
+    
+    # Final clipping
+    chi2 = torch.clamp(chi2, EPS, 1e6)
+    
+    return chi2
+
+
 class SAXSPotential(Potential):
     """Potential that guides structures to match experimental SAXS data."""
     
@@ -392,7 +549,127 @@ class SAXSPotential(Potential):
         return energy, dEnergy
     
     def _compute_saxs_chi2(self, coords):
-        """Compute chi-squared between calculated and experimental SAXS profiles using JAX."""
+        """Compute chi-squared between calculated and experimental SAXS profiles."""
+        # Route to optimized implementation if enabled
+        if use_vectorized_saxs():
+            return self._compute_saxs_chi2_optimized(coords)
+        else:
+            return self._compute_saxs_chi2_original(coords)
+
+    def _get_atom_types_tensor(self, device):
+        """Get atom types as a PyTorch tensor on the specified device."""
+        if hasattr(self, '_current_feats') and self._current_feats is not None:
+            # Try to extract atom types from features
+            if 'ref_element' in self._current_feats:
+                # ref_element is typically a one-hot tensor [natoms, nelements]
+                ref_element = self._current_feats['ref_element'][0]  # Remove batch dim
+                if ref_element.ndim == 2:
+                    # Convert one-hot to atomic numbers
+                    atom_types = torch.argmax(ref_element, dim=1)
+                else:
+                    atom_types = ref_element
+                return atom_types.to(device, dtype=torch.long)
+        
+        # Fallback: assume all carbon atoms (common for proteins)
+        print("SAXS: Warning - could not extract atom types, assuming all carbon")
+        # Use a reasonable number of atoms based on coordinates
+        return torch.full((100,), 6, device=device, dtype=torch.long)  # Carbon
+
+    def _compute_saxs_chi2_optimized(self, coords):
+        """Compute chi-squared using optimized PyTorch operations (no CPU-GPU transfers)."""
+        if not hasattr(self, '_current_feats') or self._current_feats is None:
+            return torch.tensor(1000.0, device=coords.device, dtype=coords.dtype)
+        
+        # Check for invalid coordinates
+        if torch.isnan(coords).any() or torch.isinf(coords).any():
+            print("SAXS: Invalid coordinates detected (NaN/Inf), returning fallback chi2")
+            return torch.tensor(1000.0, device=coords.device, dtype=coords.dtype)
+        
+        print(f"SAXS: Computing chi2 OPTIMIZED for step {self._step_counter}, sample {self._sample_counter}")
+        
+        # Handle batch dimensions - stay on GPU
+        if coords.ndim == 3:
+            coords_flat = coords[0]  # [num_atoms, 3]
+        elif coords.ndim == 4:
+            coords_flat = coords[0, 0]  # [num_atoms, 3]
+        else:
+            coords_flat = coords
+            
+        try:
+            # Check coordinate set dimensions
+            if coords_flat.shape[0] < 3:
+                print("SAXS: Not enough atoms for SAXS calculation")
+                return torch.tensor(1000.0, device=coords.device, dtype=coords.dtype)
+                
+            print(f"SAXS: Computing SAXS with PyTorch for {coords_flat.shape[0]} atoms")
+            
+            # Validate structure (all on GPU)
+            coords_centered = coords_flat - torch.mean(coords_flat, dim=0)
+            max_dist = torch.max(torch.norm(coords_centered, dim=1))
+            min_dist_vec = torch.norm(coords_centered - coords_centered[0], dim=1)[1:]
+            if min_dist_vec.numel() > 0:
+                min_dist = torch.min(min_dist_vec)
+            else:
+                min_dist = torch.tensor(1.0, device=coords.device)
+            
+            # Check for structural collapse or explosion
+            if max_dist > 500.0:
+                print(f"SAXS: Structure too extended (max_dist={max_dist:.1f}Å), applying penalty")
+                return torch.tensor(1000.0, device=coords.device) + max_dist
+                
+            if min_dist < 0.5:
+                print(f"SAXS: Atoms too close (min_dist={min_dist:.3f}Å), applying penalty")
+                return torch.tensor(1000.0, device=coords.device) + 1.0/min_dist
+            
+            # Get atom types from current features
+            atom_types = self._get_atom_types_tensor(coords.device)
+            
+            # Ensure atom_types matches coordinate dimensions
+            n_coords = coords_flat.shape[0]
+            if atom_types.shape[0] != n_coords:
+                # Resize atom_types to match coordinates
+                if atom_types.shape[0] > n_coords:
+                    atom_types = atom_types[:n_coords]
+                else:
+                    # Pad with carbon atoms
+                    padding = torch.full((n_coords - atom_types.shape[0],), 6, device=coords.device, dtype=torch.long)
+                    atom_types = torch.cat([atom_types, padding], dim=0)
+            
+            # Prepare experimental data as tensors
+            max_q_points = min(len(self.q_exp), 100)  # Limit for performance
+            q_exp_tensor = torch.tensor(self.q_exp[:max_q_points], device=coords.device, dtype=coords.dtype)
+            I_exp_tensor = torch.tensor(self.I_exp[:max_q_points], device=coords.device, dtype=coords.dtype)
+            sigma_exp_tensor = torch.tensor(self.sigma_exp[:max_q_points], device=coords.device, dtype=coords.dtype)
+            
+            # Compute chi2 using optimized PyTorch functions
+            chi2 = compute_saxs_chi2_torch(coords_centered, q_exp_tensor, I_exp_tensor, sigma_exp_tensor, atom_types)
+            
+            chi2_val = chi2.item()
+            print(f"SAXS: Calculated chi2 = {chi2_val:.3f} (OPTIMIZED)")
+            if chi2_val > 50.0:
+                print(f"SAXS: Note - High chi2 value ({chi2_val:.1f}) indicates poor fit")
+            
+            # Log chi2 if enabled
+            if self.log_chi2:
+                if self._sample_counter not in self._chi2_logs:
+                    self._chi2_logs[self._sample_counter] = []
+                self._chi2_logs[self._sample_counter].append({
+                    'step': self._step_counter,
+                    'sample': self._sample_counter,
+                    'chi2': float(chi2_val),
+                    'scale_factor': 1.0,  # scaling handled internally
+                    'shift_factor': 0.0,  # shifting handled internally
+                    'optimized': True
+                })
+            
+            return chi2
+            
+        except Exception as e:
+            print(f"Warning: Optimized SAXS calculation failed: {e}")
+            return torch.tensor(1000.0, device=coords.device, dtype=coords.dtype)
+
+    def _compute_saxs_chi2_original(self, coords):
+        """Compute chi-squared using original JAX implementation."""
         if not hasattr(self, '_current_feats') or self._current_feats is None:
             # Fall back to dummy calculation if no atom information available
             return torch.tensor(1000.0, device=coords.device, dtype=coords.dtype)
