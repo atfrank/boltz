@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Debug configuration to test parameter passing
+guidance:
+  rg:
+    target_rg: 30.0  # Higher target to test convergence capability
+    force_constant: 100.0  # High force constant
+    mass_weighted: true
+    
+    # Test configuration passing
+    robust_mode: true
+    max_displacement_per_step: 5.0  # Larger movements
+    outlier_threshold: 3.0
+    rg_calculation_method: "robust"
+    gradient_capping: 30.0  # Higher gradient cap
+    force_ramping: false  # DISABLE RAMPING COMPLETELY
+    min_force_constant: 99.0  # Should not matter if ramping is disabled
+    ramping_steps: 1  # Should not matter if ramping is disabled
+
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

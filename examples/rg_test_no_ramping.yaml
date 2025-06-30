@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Test that force_ramping=false and other parameters work from YAML
+guidance:
+  rg:
+    target_rg: 24.5
+    force_constant: 100.0  # High force constant that should be used immediately
+    mass_weighted: true
+    
+    # Robustness parameters - these should override defaults
+    robust_mode: true
+    max_displacement_per_step: 4.0  # Should be 4.0, not default 2.0
+    outlier_threshold: 2.5  # Should be 2.5, not default 3.0
+    rg_calculation_method: "robust"
+    gradient_capping: 25.0  # Should be 25.0, not default 10.0
+    force_ramping: false  # CRITICAL: Should disable ramping completely
+    min_force_constant: 999.0  # Should not matter since ramping disabled
+    ramping_steps: 999  # Should not matter since ramping disabled
+
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

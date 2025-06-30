@@ -67,6 +67,22 @@ class BoltzWriter(BasePredictionWriter):
         coords = coords.unsqueeze(0)
 
         pad_masks = prediction["masks"]
+        
+        # Handle SAXS logs if available in predictions
+        if "saxs_logs" in prediction:
+            # Save SAXS logs for all samples
+            for record in records:
+                struct_dir = self.output_dir / record.id
+                struct_dir.mkdir(exist_ok=True)
+                
+                saxs_logs = prediction["saxs_logs"]
+                if saxs_logs:
+                    for sample_id, log_data in saxs_logs.items():
+                        log_file = struct_dir / f"saxs_chi2_sample_{sample_id}.json"
+                        with log_file.open('w') as f:
+                            json.dump(log_data, f, indent=2)
+                        print(f"SAXS chi-squared log saved to {log_file}")
+                break  # Only need to save once for all records
 
         # Get ranking
         if "confidence_score" in prediction:
@@ -173,77 +189,92 @@ class BoltzWriter(BasePredictionWriter):
                     path = struct_dir / f"{outname}.npz"
                     np.savez_compressed(path, **asdict(new_structure))
                 
-                # Save trajectory if available
-                if "trajectory_coords" in prediction and idx_to_rank[model_idx] == 0:
-                    # Only save trajectory for the best model
+                # Save trajectory if available for this specific sample
+                if "trajectory_coords" in prediction:
                     trajectory_coords_tensor = prediction["trajectory_coords"]
                     if hasattr(trajectory_coords_tensor, 'cpu'):
-                        trajectory_coords = trajectory_coords_tensor.cpu().numpy()
+                        trajectory_coords_all = trajectory_coords_tensor.cpu().numpy()
                     else:
-                        trajectory_coords = trajectory_coords_tensor
+                        trajectory_coords_all = trajectory_coords_tensor
                     
-                    # Create trajectory structures for each frame
-                    trajectory_structures = []
-                    for frame_idx in range(trajectory_coords.shape[0]):
-                        frame_coords = trajectory_coords[frame_idx]
-                        
-                        # Unpad coordinates (ensure pad_mask is on CPU)
-                        pad_mask_cpu = pad_mask.cpu() if hasattr(pad_mask, 'cpu') else pad_mask
-                        frame_coords_unpad = frame_coords[pad_mask_cpu.bool()]
-                        
-                        # Create structure for this frame
-                        frame_atoms = structure.atoms.copy()
-                        frame_atoms["coords"] = frame_coords_unpad
-                        frame_atoms["is_present"] = True
-                        
-                        if self.boltz2:
-                            frame_coords_typed = [(x,) for x in frame_coords_unpad]
-                            frame_coords_typed = np.array(frame_coords_typed, dtype=Coords)
-                            frame_structure = replace(
-                                structure,
-                                atoms=frame_atoms,
-                                residues=residues,
-                                interfaces=interfaces,
-                                coords=frame_coords_typed,
-                            )
+                    # Extract trajectory for current sample (model_idx)
+                    # trajectory shape: [n_steps, n_samples, n_atoms, 3]
+                    if len(trajectory_coords_all.shape) == 4:
+                        # Multiple samples
+                        if model_idx < trajectory_coords_all.shape[1]:
+                            trajectory_coords = trajectory_coords_all[:, model_idx]  # [n_steps, n_atoms, 3]
                         else:
-                            frame_structure = replace(
-                                structure,
-                                atoms=frame_atoms,
-                                residues=residues,
-                                interfaces=interfaces,
-                            )
-                        trajectory_structures.append(frame_structure)
+                            trajectory_coords = None
+                    else:
+                        # Single sample case (backward compatibility)
+                        if model_idx == 0:
+                            trajectory_coords = trajectory_coords_all  # [n_steps, n_atoms, 3]
+                        else:
+                            trajectory_coords = None
                     
-                    # Write trajectory file
-                    if self.output_format == "pdb":
-                        traj_path = struct_dir / f"{record.id}_trajectory.pdb"
-                        with traj_path.open("w") as f:
-                            for frame_idx, frame_structure in enumerate(trajectory_structures):
-                                f.write(f"MODEL {frame_idx + 1}\n")
-                                pdb_content = to_pdb(frame_structure, boltz2=self.boltz2)
-                                # Remove the final END line from individual models
-                                pdb_lines = pdb_content.strip().split('\n')
-                                if pdb_lines and pdb_lines[-1] == "END":
-                                    pdb_lines = pdb_lines[:-1]
-                                f.write('\n'.join(pdb_lines) + '\n')
-                                f.write("ENDMDL\n")
-                            f.write("END\n")
-                    elif self.output_format == "mmcif":
-                        traj_path = struct_dir / f"{record.id}_trajectory.cif"
-                        with traj_path.open("w") as f:
-                            # For now, write each model as separate mmCIF entries
-                            # Full multi-model mmCIF requires complex ModelCIF library coordination
-                            for frame_idx, frame_structure in enumerate(trajectory_structures):
-                                if frame_idx == 0:
-                                    # Write the first model with full mmCIF structure
-                                    f.write(to_mmcif(frame_structure, boltz2=self.boltz2))
-                                else:
-                                    # For subsequent models, would need to append coordinate data
-                                    # with proper model numbering - this is complex with ModelCIF
-                                    pass
-                            # Note: Full multi-model implementation would require coordination
-                            # of all mmCIF data sections with proper model numbering
+                    if trajectory_coords is not None:
+                        # Create trajectory structures for each frame
+                        trajectory_structures = []
+                        for frame_idx in range(trajectory_coords.shape[0]):
+                            frame_coords = trajectory_coords[frame_idx]
+                            
+                            # Unpad coordinates (ensure pad_mask is on CPU)
+                            pad_mask_cpu = pad_mask.cpu() if hasattr(pad_mask, 'cpu') else pad_mask
+                            frame_coords_unpad = frame_coords[pad_mask_cpu.bool()]
+                            
+                            # Create structure for this frame
+                            frame_atoms = structure.atoms.copy()
+                            frame_atoms["coords"] = frame_coords_unpad
+                            frame_atoms["is_present"] = True
+                            
+                            if self.boltz2:
+                                frame_coords_typed = [(x,) for x in frame_coords_unpad]
+                                frame_coords_typed = np.array(frame_coords_typed, dtype=Coords)
+                                frame_structure = replace(
+                                    structure,
+                                    atoms=frame_atoms,
+                                    residues=residues,
+                                    interfaces=interfaces,
+                                    coords=frame_coords_typed,
+                                )
+                            else:
+                                frame_structure = replace(
+                                    structure,
+                                    atoms=frame_atoms,
+                                    residues=residues,
+                                    interfaces=interfaces,
+                                )
+                            trajectory_structures.append(frame_structure)
+                    
+                        # Write trajectory file with sample number
+                        if self.output_format == "pdb":
+                            traj_path = struct_dir / f"{record.id}_model_{model_idx}_trajectory.pdb"
+                            with traj_path.open("w") as f:
+                                for frame_idx, frame_structure in enumerate(trajectory_structures):
+                                    f.write(f"MODEL {frame_idx + 1}\n")
+                                    pdb_content = to_pdb(frame_structure, boltz2=self.boltz2)
+                                    # Remove the final END line from individual models
+                                    pdb_lines = pdb_content.strip().split('\n')
+                                    if pdb_lines and pdb_lines[-1] == "END":
+                                        pdb_lines = pdb_lines[:-1]
+                                    f.write('\n'.join(pdb_lines) + '\n')
+                                    f.write("ENDMDL\n")
+                                f.write("END\n")
+                        elif self.output_format == "mmcif":
+                            traj_path = struct_dir / f"{record.id}_model_{model_idx}_trajectory.cif"
+                            with traj_path.open("w") as f:
+                                # For now, write each model as separate mmCIF entries
+                                # Full multi-model mmCIF requires complex ModelCIF library coordination
+                                for frame_idx, frame_structure in enumerate(trajectory_structures):
+                                    if frame_idx == 0:
+                                        # Write the first model with full mmCIF structure
+                                        f.write(to_mmcif(frame_structure, boltz2=self.boltz2))
+                                    else:
+                                        # For subsequent models, would need to append coordinate data
+                                        # with proper model numbering - this is complex with ModelCIF
+                                        pass
+                                # Note: Full multi-model implementation would require coordination
+                                # of all mmCIF data sections with proper model numbering
 
                 if self.boltz2 and record.affinity and idx_to_rank[model_idx] == 0:
                     path = struct_dir / f"pre_affinity_{record.id}.npz"
@@ -282,6 +313,20 @@ class BoltzWriter(BasePredictionWriter):
                         }
                         for idx1 in prediction["pair_chains_iptm"]
                     }
+                    # Add Rg guidance information if available
+                    print(f"Writer: Checking prediction keys: {list(prediction.keys())}")
+                    if "rg_guidance" in prediction:
+                        rg_info = prediction["rg_guidance"]
+                        print(f"Writer: Found rg_guidance: {rg_info}")
+                        confidence_summary_dict["rg_guidance"] = {
+                            "final_rg": rg_info["final_rg"],
+                            "target_rg": rg_info["target_rg"],
+                            "rg_error": rg_info["rg_error"],
+                            "rg_relative_error": rg_info["rg_relative_error"]
+                        }
+                    else:
+                        print("Writer: No rg_guidance found in prediction")
+                    
                     with path.open("w") as f:
                         f.write(
                             json.dumps(

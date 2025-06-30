@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Test PDB-derived target Rg guidance
+guidance:
+  rg:
+    # Calculate target Rg from reference PDB structure
+    reference_pdb_path: "./examples/reference_structure.pdb"
+    pdb_chain_id: "A"  # Specific chain to analyze (optional)
+    pdb_atom_selection: "all"  # Use all atoms for Rg calculation
+    
+    # Force parameters
+    force_constant: 100.0
+    mass_weighted: true
+    
+    # Optimal robustness parameters for PDB-guided folding
+    robust_mode: true
+    force_ramping: false  # Use full force immediately
+    max_displacement_per_step: 3.0
+    outlier_threshold: 2.5
+    rg_calculation_method: "robust"
+    gradient_capping: 20.0
+
+output:
+  confidence_detailed: true

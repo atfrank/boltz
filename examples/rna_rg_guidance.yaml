@@ -1,0 +1,25 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Radius of gyration guidance - much simpler and faster than full SAXS
+guidance:
+  rg:
+    # Option 1: Specify target Rg directly (in Angstroms)
+    target_rg: 24.5
+    force_constant: 10.0  # kcal/mol/Å² - start lower, adaptive increase
+    mass_weighted: true
+    
+    # Optional: extract target from experimental SAXS via Guinier analysis
+    # saxs_file_path: "./examples/set_2.dat"
+    # q_min: 0.01  # Minimum q for Guinier fit (Å⁻¹)
+    # q_max: 0.05  # Maximum q for Guinier fit (Å⁻¹)
+
+# Optional: SAXS scoring for final structures (no guidance, just evaluation)
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

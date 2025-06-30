@@ -1,0 +1,35 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Robust Radius of Gyration guidance with outlier protection
+guidance:
+  rg:
+    # Target Rg
+    target_rg: 24.5
+    force_constant: 50.0  # Higher force constant to test robustness
+    mass_weighted: true
+    
+    # Robustness features to prevent extreme atom displacement
+    robust_mode: true
+    max_displacement_per_step: 2.0  # Limit atom displacement per step (Å)
+    outlier_threshold: 3.0  # Standard deviations for outlier detection
+    rg_calculation_method: "robust"  # "standard", "robust", "trimmed"
+    gradient_capping: 10.0  # Maximum gradient per atom (kcal/mol/Å)
+    force_ramping: true  # Gradually increase force constant
+    min_force_constant: 2.0  # Starting force constant
+    ramping_steps: 30  # Steps to reach full force constant
+    
+    # Optional: extract target from experimental SAXS via Guinier analysis
+    # saxs_file_path: "./examples/set_2.dat"
+    # q_min: 0.01  # Minimum q for Guinier fit (Å⁻¹)
+    # q_max: 0.05  # Maximum q for Guinier fit (Å⁻¹)
+
+# Optional: SAXS scoring for final structures (no guidance, just evaluation)
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"
