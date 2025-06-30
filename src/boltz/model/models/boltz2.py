@@ -1105,6 +1105,10 @@ class Boltz2(LightningModule):
             if "trajectory_coords" in out:
                 pred_dict["trajectory_coords"] = out["trajectory_coords"]
             
+            # Add denoised trajectory if available
+            if "trajectory_denoised_coords" in out:
+                pred_dict["trajectory_denoised_coords"] = out["trajectory_denoised_coords"]
+            
             if self.confidence_prediction:
                 # pred_dict["confidence"] = out.get("ablation_confidence", None)
                 pred_dict["pde"] = out["pde"]

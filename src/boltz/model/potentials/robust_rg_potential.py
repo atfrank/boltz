@@ -103,12 +103,45 @@ class RobustRgPotential(RadiusOfGyrationPotential):
             com: Center of mass
             info: Dictionary with diagnostic information
         """
-        # Handle batch dimensions
+        # Handle batch dimensions properly
         if coords.ndim == 3:
-            coord_batch = coords[0]
+            # coords shape: (batch_size, num_atoms, 3)
+            batch_size = coords.shape[0]
+            
+            if batch_size == 1:
+                # Single sample case
+                coord_batch = coords[0]
+            else:
+                # Multiple samples - process each sample separately and average the results
+                rg_values = []
+                com_values = []
+                info_list = []
+                
+                for i in range(batch_size):
+                    single_coords = coords[i]  # Shape: (num_atoms, 3)
+                    single_rg, single_com, single_info = self.compute_robust_rg(single_coords, masses)
+                    rg_values.append(single_rg)
+                    com_values.append(single_com)
+                    info_list.append(single_info)
+                
+                # Return averaged results
+                rg = torch.stack(rg_values).mean()
+                com = torch.stack(com_values).mean(dim=0)  # Average center of mass
+                
+                # Combine info from all samples
+                avg_info = {"method": self.rg_calculation_method, "n_atoms": info_list[0]["n_atoms"]}
+                if "outliers_detected" in info_list[0]:
+                    avg_info["outliers_detected"] = sum(info["outliers_detected"] for info in info_list) // len(info_list)
+                if "valid_atoms" in info_list[0]:
+                    avg_info["valid_atoms"] = sum(info["valid_atoms"] for info in info_list) // len(info_list)
+                
+                return rg, com, avg_info
+                
         elif coords.ndim == 4:
+            # coords shape: (batch1, batch2, num_atoms, 3)  
             coord_batch = coords[0, 0]
         else:
+            # coords shape: (num_atoms, 3)
             coord_batch = coords
         
         n_atoms = coord_batch.shape[0]
@@ -293,11 +326,24 @@ class RobustRgPotential(RadiusOfGyrationPotential):
         masses: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, dict]:
         """Compute both energy and gradients with robustness features."""
+        # Increment step count (same as compute_energy)
+        self.step_count += 1
+        
+        # Store previous coordinates for displacement monitoring
+        if coords.ndim == 3:
+            current_coords = coords[0].clone()
+        elif coords.ndim == 4:
+            current_coords = coords[0, 0].clone()
+        else:
+            current_coords = coords.clone()
+        
         # Compute robust Rg and related quantities
         current_rg, com, rg_info = self.compute_robust_rg(coords, masses)
         
-        # Determine valid atoms from the Rg calculation
+        # Determine valid atoms from the Rg calculation - use same logic as compute_robust_rg
         if coords.ndim == 3:
+            # For batch processing, use the first sample for gradient computation
+            # (The Rg value returned is already averaged across the batch)
             coord_batch = coords[0]
         elif coords.ndim == 4:
             coord_batch = coords[0, 0]
@@ -343,5 +389,8 @@ class RobustRgPotential(RadiusOfGyrationPotential):
             "displacement_violations": self.displacement_violations,
             **rg_info
         }
+        
+        # Update previous coordinates
+        self.previous_coords = current_coords
         
         return energy, grad_coords, info

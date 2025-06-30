@@ -89,8 +89,37 @@ class RobustRgPotentialWrapper(Potential):
         self._last_info = {}
         self._final_rg = None
         
+        # Simple step tracking for logging control
+        self._diffusion_step = 0
+        self._last_logged_step = -1
+        self._guidance_call_count = 0
+        
         print(f"Initialized RobustRgPotentialWrapper with {rg_calculation_method} Rg calculation")
         print(f"Force constant: {rg_config.force_constant} → ramping: {force_ramping}")
+    
+    def set_step_info(self, diffusion_step: int, guidance_step: int = 0):
+        """Set step information for proper logging control."""
+        if diffusion_step != self._diffusion_step:
+            # New diffusion step - reset guidance call count
+            self._diffusion_step = diffusion_step
+            self._guidance_call_count = 0
+        
+        # Track which guidance step we're on
+        self._guidance_call_count = guidance_step
+    
+    def log_raw_rg(self, step_idx: int, coords: torch.Tensor, feats: dict):
+        """Log Rg on raw denoised coordinates before gradient descent optimization."""
+        try:
+            # Compute Rg on raw coordinates
+            current_rg, com, rg_info = self.rg_potential.compute_robust_rg(coords, masses=None)
+            
+            print(f"Raw denoised Rg step {step_idx:3d}: "
+                  f"Rg={current_rg.item():5.2f}Å "
+                  f"target={self.rg_potential.target_rg:5.2f}Å "
+                  f"error={abs(current_rg.item() - self.rg_potential.target_rg):5.2f}Å "
+                  f"(before optimization)")
+        except Exception as e:
+            print(f"Warning: Failed to compute raw Rg for step {step_idx}: {e}")
         
     def compute_args(self, feats, parameters):
         """Compute arguments for the potential."""
@@ -136,38 +165,39 @@ class RobustRgPotentialWrapper(Potential):
         self._last_info = info
         self._final_rg = info["rg"]
         
-        # Log progress with robustness information
-        step = info.get("step", 0)
-        rg = info["rg"]
-        target_rg = info["target_rg"]
-        rg_error = info["rg_error"]
-        effective_k = info["effective_k"]
-        energy = info["energy"]
+        # Only log progress once per diffusion step at the end of optimization
+        # Log on first guidance call of each step to show post-optimization result
+        should_log = (self._diffusion_step != self._last_logged_step and 
+                     self._guidance_call_count == 0)
         
-        log_msg = (f"Robust Rg step {step:3d}: "
-                  f"Rg={rg:5.2f}Å "
-                  f"target={target_rg:5.2f}Å "
-                  f"error={rg_error:5.2f}Å "
-                  f"energy={energy:8.3f} "
-                  f"k_eff={effective_k:6.1f}")
-        
-        # Add robustness info
-        if "outliers_detected" in info:
-            log_msg += f" outliers={info['outliers_detected']}"
-        if "trimmed_atoms" in info:
-            log_msg += f" trimmed={info['trimmed_atoms']}"
-        if "displacement_violations" in info and info["displacement_violations"] > 0:
-            log_msg += f" disp_viol={info['displacement_violations']}"
-        
-        print(log_msg)
-        
-        # Additional detailed logging for gradients
-        if compute_gradient and grad_coords is not None:
-            max_grad = info.get("max_gradient", 0.0)
-            grad_norm = info.get("gradient_norm", 0.0)
-            print(f"           gradients: max={max_grad:.6f} "
-                  f"norm={grad_norm:.6f} "
-                  f"valid_atoms={info.get('valid_atoms', 'N/A')}")
+        if should_log:
+            # Mark this step as logged
+            self._last_logged_step = self._diffusion_step
+            
+            # Log progress with robustness information
+            rg = info["rg"]
+            target_rg = info["target_rg"]
+            rg_error = info["rg_error"]
+            effective_k = info["effective_k"]
+            energy = info["energy"]
+            
+            log_msg = (f"Optimized Rg step {self._diffusion_step:3d}: "
+                      f"Rg={rg:5.2f}Å "
+                      f"target={target_rg:5.2f}Å "
+                      f"error={rg_error:5.2f}Å "
+                      f"energy={energy:8.3f} "
+                      f"k_eff={effective_k:6.1f}")
+            
+            # Add robustness info
+            if "outliers_detected" in info:
+                log_msg += f" outliers={info['outliers_detected']}"
+            if "trimmed_atoms" in info:
+                log_msg += f" trimmed={info['trimmed_atoms']}"
+            if "displacement_violations" in info and info["displacement_violations"] > 0:
+                log_msg += f" disp_viol={info['displacement_violations']}"
+            
+            log_msg += " (post-optimization)"
+            print(log_msg)
         
         # Convert to tensor with same shape as r_ij distances  
         energy_per_pair = rg_energy_global.expand_as(r_ij[..., 0])

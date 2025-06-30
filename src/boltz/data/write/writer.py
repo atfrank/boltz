@@ -189,81 +189,94 @@ class BoltzWriter(BasePredictionWriter):
                     path = struct_dir / f"{outname}.npz"
                     np.savez_compressed(path, **asdict(new_structure))
                 
-                # Save trajectory if available for this specific sample
-                if "trajectory_coords" in prediction:
-                    trajectory_coords_tensor = prediction["trajectory_coords"]
-                    if hasattr(trajectory_coords_tensor, 'cpu'):
-                        trajectory_coords_all = trajectory_coords_tensor.cpu().numpy()
+                # Helper function to extract trajectory for current sample
+                def extract_trajectory_for_sample(trajectory_tensor, model_idx):
+                    if hasattr(trajectory_tensor, 'cpu'):
+                        trajectory_all = trajectory_tensor.cpu().numpy()
                     else:
-                        trajectory_coords_all = trajectory_coords_tensor
+                        trajectory_all = trajectory_tensor
                     
                     # Extract trajectory for current sample (model_idx)
                     # trajectory shape: [n_steps, n_samples, n_atoms, 3]
-                    if len(trajectory_coords_all.shape) == 4:
+                    if len(trajectory_all.shape) == 4:
                         # Multiple samples
-                        if model_idx < trajectory_coords_all.shape[1]:
-                            trajectory_coords = trajectory_coords_all[:, model_idx]  # [n_steps, n_atoms, 3]
+                        if model_idx < trajectory_all.shape[1]:
+                            return trajectory_all[:, model_idx]  # [n_steps, n_atoms, 3]
                         else:
-                            trajectory_coords = None
+                            return None
                     else:
                         # Single sample case (backward compatibility)
                         if model_idx == 0:
-                            trajectory_coords = trajectory_coords_all  # [n_steps, n_atoms, 3]
+                            return trajectory_all  # [n_steps, n_atoms, 3]
                         else:
-                            trajectory_coords = None
+                            return None
+
+                # Save raw diffusion trajectory if available for this specific sample
+                trajectory_coords = None
+                if "trajectory_coords" in prediction:
+                    trajectory_coords = extract_trajectory_for_sample(prediction["trajectory_coords"], model_idx)
+                
+                # Save denoised trajectory if available for this specific sample
+                trajectory_denoised_coords = None
+                if "trajectory_denoised_coords" in prediction:
+                    trajectory_denoised_coords = extract_trajectory_for_sample(prediction["trajectory_denoised_coords"], model_idx)
+                
+                # Function to save trajectory (either raw or denoised)
+                def save_trajectory_file(coords, suffix=""):
+                    if coords is None:
+                        return
                     
-                    if trajectory_coords is not None:
-                        # Create trajectory structures for each frame
-                        trajectory_structures = []
-                        for frame_idx in range(trajectory_coords.shape[0]):
-                            frame_coords = trajectory_coords[frame_idx]
-                            
-                            # Unpad coordinates (ensure pad_mask is on CPU)
-                            pad_mask_cpu = pad_mask.cpu() if hasattr(pad_mask, 'cpu') else pad_mask
-                            frame_coords_unpad = frame_coords[pad_mask_cpu.bool()]
-                            
-                            # Create structure for this frame
-                            frame_atoms = structure.atoms.copy()
-                            frame_atoms["coords"] = frame_coords_unpad
-                            frame_atoms["is_present"] = True
-                            
-                            if self.boltz2:
-                                frame_coords_typed = [(x,) for x in frame_coords_unpad]
-                                frame_coords_typed = np.array(frame_coords_typed, dtype=Coords)
-                                frame_structure = replace(
-                                    structure,
-                                    atoms=frame_atoms,
-                                    residues=residues,
-                                    interfaces=interfaces,
-                                    coords=frame_coords_typed,
-                                )
-                            else:
-                                frame_structure = replace(
-                                    structure,
-                                    atoms=frame_atoms,
-                                    residues=residues,
-                                    interfaces=interfaces,
-                                )
-                            trajectory_structures.append(frame_structure)
+                    # Create trajectory structures for each frame
+                    trajectory_structures = []
+                    for frame_idx in range(coords.shape[0]):
+                        frame_coords = coords[frame_idx]
+                        
+                        # Unpad coordinates (ensure pad_mask is on CPU)
+                        pad_mask_cpu = pad_mask.cpu() if hasattr(pad_mask, 'cpu') else pad_mask
+                        frame_coords_unpad = frame_coords[pad_mask_cpu.bool()]
+                        
+                        # Create structure for this frame
+                        frame_atoms = structure.atoms.copy()
+                        frame_atoms["coords"] = frame_coords_unpad
+                        frame_atoms["is_present"] = True
+                        
+                        if self.boltz2:
+                            frame_coords_typed = [(x,) for x in frame_coords_unpad]
+                            frame_coords_typed = np.array(frame_coords_typed, dtype=Coords)
+                            frame_structure = replace(
+                                structure,
+                                atoms=frame_atoms,
+                                residues=residues,
+                                interfaces=interfaces,
+                                coords=frame_coords_typed,
+                            )
+                        else:
+                            frame_structure = replace(
+                                structure,
+                                atoms=frame_atoms,
+                                residues=residues,
+                                interfaces=interfaces,
+                            )
+                        trajectory_structures.append(frame_structure)
                     
-                        # Write trajectory file with sample number
-                        if self.output_format == "pdb":
-                            traj_path = struct_dir / f"{record.id}_model_{model_idx}_trajectory.pdb"
-                            with traj_path.open("w") as f:
-                                for frame_idx, frame_structure in enumerate(trajectory_structures):
-                                    f.write(f"MODEL {frame_idx + 1}\n")
-                                    pdb_content = to_pdb(frame_structure, boltz2=self.boltz2)
-                                    # Remove the final END line from individual models
-                                    pdb_lines = pdb_content.strip().split('\n')
-                                    if pdb_lines and pdb_lines[-1] == "END":
-                                        pdb_lines = pdb_lines[:-1]
-                                    f.write('\n'.join(pdb_lines) + '\n')
-                                    f.write("ENDMDL\n")
-                                f.write("END\n")
-                        elif self.output_format == "mmcif":
-                            traj_path = struct_dir / f"{record.id}_model_{model_idx}_trajectory.cif"
-                            with traj_path.open("w") as f:
-                                # For now, write each model as separate mmCIF entries
+                    # Write trajectory file with sample number
+                    if self.output_format == "pdb":
+                        traj_path = struct_dir / f"{record.id}_model_{model_idx}_trajectory{suffix}.pdb"
+                        with traj_path.open("w") as f:
+                            for frame_idx, frame_structure in enumerate(trajectory_structures):
+                                f.write(f"MODEL {frame_idx + 1}\n")
+                                pdb_content = to_pdb(frame_structure, boltz2=self.boltz2)
+                                # Remove the final END line from individual models
+                                pdb_lines = pdb_content.strip().split('\n')
+                                if pdb_lines and pdb_lines[-1] == "END":
+                                    pdb_lines = pdb_lines[:-1]
+                                f.write('\n'.join(pdb_lines) + '\n')
+                                f.write("ENDMDL\n")
+                            f.write("END\n")
+                    elif self.output_format == "mmcif":
+                        traj_path = struct_dir / f"{record.id}_model_{model_idx}_trajectory{suffix}.cif"
+                        with traj_path.open("w") as f:
+                            # For now, write each model as separate mmCIF entries
                                 # Full multi-model mmCIF requires complex ModelCIF library coordination
                                 for frame_idx, frame_structure in enumerate(trajectory_structures):
                                     if frame_idx == 0:
@@ -275,6 +288,10 @@ class BoltzWriter(BasePredictionWriter):
                                         pass
                                 # Note: Full multi-model implementation would require coordination
                                 # of all mmCIF data sections with proper model numbering
+                
+                # Save both trajectory types
+                save_trajectory_file(trajectory_coords, "")  # Raw diffusion trajectory
+                save_trajectory_file(trajectory_denoised_coords, "_denoised")  # Denoised trajectory
 
                 if self.boltz2 and record.affinity and idx_to_rank[model_idx] == 0:
                     path = struct_dir / f"pre_affinity_{record.id}.npz"

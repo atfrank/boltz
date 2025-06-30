@@ -507,11 +507,14 @@ class AtomDiffusion(Module):
         
         # Initialize trajectory storage for all samples
         trajectory_coords = []
+        trajectory_denoised_coords = []
         if save_trajectory:
             # Store initial coordinates (centered, only first sample to ensure consistency)
             centered_initial = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
             # Only store first sample to avoid dimension issues with resampling
             trajectory_coords.append(centered_initial[:1].clone().cpu())
+            # No denoised coordinates for initial step (pure noise)
+            trajectory_denoised_coords.append(None)
 
         # gradually denoise
         for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(sigmas_and_gammas):
@@ -635,14 +638,18 @@ class AtomDiffusion(Module):
                     steering_args["guidance_update"]
                     and step_idx < num_sampling_steps - 1
                 ):
+                    # Log Rg on raw denoised coordinates before gradient descent optimization
+                    for potential in potentials:
+                        if hasattr(potential, 'log_raw_rg'):
+                            potential.log_raw_rg(step_idx, atom_coords_denoised, network_condition_kwargs["feats"])
+                    
                     guidance_update = torch.zeros_like(atom_coords_denoised)
                     for guidance_step in range(steering_args["num_gd_steps"]):
                         energy_gradient = torch.zeros_like(atom_coords_denoised)
                         for potential in potentials:
-                            # Set step information for SAXS logging
+                            # Set step information for potentials with step tracking (SAXS, Rg, etc.)
                             if hasattr(potential, 'set_step_info'):
-                                for sample_idx in range(multiplicity):
-                                    potential.set_step_info(step_idx, sample_idx)
+                                potential.set_step_info(step_idx, guidance_step)
                             
                             parameters = potential.compute_parameters(steering_t)
                             if (
@@ -719,22 +726,26 @@ class AtomDiffusion(Module):
 
             atom_coords = atom_coords_next
             
-            # Update SAXS potentials with current step info
+            # Update potentials with current step info after diffusion step is complete
             for potential in potentials:
                 if hasattr(potential, 'set_step_info'):
-                    # Set step info for each sample in the batch
-                    for sample_idx in range(multiplicity):
-                        potential.set_step_info(step_idx, sample_idx)
+                    # Set final step info after diffusion step completion
+                    potential.set_step_info(step_idx + 1, 0)  # Next diffusion step, guidance step 0
             
             # Save trajectory step if requested (after centering like final coordinates)
             if save_trajectory:
                 # Center coordinates like final output and store all samples
                 centered_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
+                centered_denoised = atom_coords_denoised - atom_coords_denoised.mean(dim=-2, keepdims=True)
+                
                 # Ensure consistent batch size by only saving the first sample if resampling changed sizes
                 if len(trajectory_coords) > 0 and centered_coords.shape[0] != trajectory_coords[0].shape[0]:
                     # Take only the first sample to maintain consistent dimensions
                     centered_coords = centered_coords[:1]
+                    centered_denoised = centered_denoised[:1]
+                    
                 trajectory_coords.append(centered_coords.clone().cpu())
+                trajectory_denoised_coords.append(centered_denoised.clone().cpu())
 
         # Prepare output dictionary
         output_dict = dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
@@ -745,7 +756,15 @@ class AtomDiffusion(Module):
             # We want final shape [num_timesteps, num_samples, num_atoms, 3]
             trajectory_tensor = torch.stack(trajectory_coords, dim=0)
             output_dict['trajectory_coords'] = trajectory_tensor
-            print(f"Saved trajectory with {len(trajectory_coords)} steps for {multiplicity} samples")
+            
+            # Stack denoised trajectory (skip None entries)
+            denoised_frames = [frame for frame in trajectory_denoised_coords if frame is not None]
+            if denoised_frames:
+                trajectory_denoised_tensor = torch.stack(denoised_frames, dim=0)
+                output_dict['trajectory_denoised_coords'] = trajectory_denoised_tensor
+                print(f"Saved raw trajectory with {len(trajectory_coords)} steps and denoised trajectory with {len(denoised_frames)} steps for {multiplicity} samples")
+            else:
+                print(f"Saved raw trajectory with {len(trajectory_coords)} steps for {multiplicity} samples")
         
         # Collect SAXS chi-squared logs if available
         saxs_logs = {}
