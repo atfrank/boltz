@@ -135,7 +135,7 @@ class RobustRgPotential(RadiusOfGyrationPotential):
         return median_approx, mad_approx
     
     def _compute_robust_stats_quantile(self, distances: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Compute robust statistics using torch.quantile (GPU-optimized).
+        """Compute robust statistics using optimal method based on tensor size.
         
         Args:
             distances: [n_atoms] distance from center of mass
@@ -144,10 +144,20 @@ class RobustRgPotential(RadiusOfGyrationPotential):
             median_approx: 50th percentile of distances
             mad_approx: 50th percentile of absolute deviations
         """
-        # Use torch.quantile which is GPU-optimized and differentiable
-        median_approx = torch.quantile(distances, 0.5)
-        abs_deviations = torch.abs(distances - median_approx)
-        mad_approx = torch.quantile(abs_deviations, 0.5)
+        # For large tensors, use quantile; for small tensors, use median
+        # This provides the best performance across different system sizes
+        n_atoms = distances.numel()
+        
+        if n_atoms > 1000:
+            # Large systems: torch.quantile is more efficient
+            median_approx = torch.quantile(distances, 0.5)
+            abs_deviations = torch.abs(distances - median_approx)
+            mad_approx = torch.quantile(abs_deviations, 0.5)
+        else:
+            # Small systems: torch.median is faster
+            median_approx = torch.median(distances)
+            abs_deviations = torch.abs(distances - median_approx)
+            mad_approx = torch.median(abs_deviations)
         
         return median_approx, mad_approx
     

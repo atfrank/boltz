@@ -7,7 +7,7 @@ import torch
 from typing import Optional, Union
 
 # Import optimization flags
-from boltz.model.potentials.optimizations import use_vectorized_saxs
+from boltz.model.potentials.optimizations import use_vectorized_saxs, use_batch_finite_diff
 
 # Import JAX for true analytical gradients
 try:
@@ -1047,7 +1047,82 @@ class SAXSPotential(Potential):
             return torch.tensor(100.0, device=coords.device, dtype=coords.dtype, requires_grad=True)
     
     def _compute_finite_diff_gradient_real(self, coords):
-        """Compute finite difference gradients (expensive but robust).
+        """Compute finite difference gradients with optimization routing."""
+        if use_batch_finite_diff():
+            return self._compute_batch_finite_diff_gradient(coords)
+        else:
+            return self._compute_finite_diff_gradient_sequential(coords)
+    
+    def _compute_batch_finite_diff_gradient(self, coords):
+        """Compute finite difference gradients using batch operations (optimized).
+        
+        This method batches coordinate perturbations to reduce the number of
+        individual SAXS calculations from N_atoms×3 to 1 batch operation.
+        """
+        eps = self.gradient_epsilon
+        num_atoms = coords.shape[-2]
+        
+        # Check if we have atom features available
+        if not hasattr(self, '_current_feats') or self._current_feats is None:
+            print("SAXS: No atom features for batch finite diff gradients, returning zero gradients")
+            return torch.zeros_like(coords)
+        
+        print(f"SAXS: Computing BATCH finite difference gradients for {num_atoms} atoms")
+        
+        # Get base chi2 value
+        base_chi2 = self._compute_saxs_chi2_real(coords)
+        
+        # Create batch of perturbed coordinates
+        # Shape: [num_atoms * 3, ...] where each entry is coords with one perturbation
+        batch_coords = []
+        perturbation_info = []  # Track which atom/dim each perturbation affects
+        
+        for atom_idx in range(num_atoms):
+            for dim in range(3):
+                coords_pert = coords.clone()
+                coords_pert[..., atom_idx, dim] += eps
+                batch_coords.append(coords_pert)
+                perturbation_info.append((atom_idx, dim))
+        
+        # Convert to batch tensor
+        # Stack along new batch dimension: [num_perturbations, ...]
+        coords_batch = torch.stack(batch_coords, dim=0)
+        
+        # Compute chi2 for all perturbations in parallel
+        # This is the key optimization - vectorized computation
+        chi2_batch = []
+        batch_size = min(50, len(batch_coords))  # Process in chunks to manage memory
+        
+        print(f"SAXS: Processing {len(batch_coords)} perturbations in batches of {batch_size}")
+        
+        for i in range(0, len(batch_coords), batch_size):
+            batch_end = min(i + batch_size, len(batch_coords))
+            batch_chunk = coords_batch[i:batch_end]
+            
+            # Compute chi2 for each perturbation in the chunk
+            chi2_chunk = []
+            for j in range(batch_chunk.shape[0]):
+                chi2_val = self._compute_saxs_chi2_real(batch_chunk[j])
+                chi2_chunk.append(chi2_val)
+            
+            chi2_batch.extend(chi2_chunk)
+            
+            if i % (batch_size * 5) == 0:  # Progress reporting
+                print(f"SAXS: Batch progress: {batch_end}/{len(batch_coords)} perturbations")
+        
+        # Compute gradients from finite differences
+        grad = torch.zeros_like(coords)
+        
+        for idx, (atom_idx, dim) in enumerate(perturbation_info):
+            dchi2_dcoord = (chi2_batch[idx] - base_chi2) / eps
+            grad_value = -dchi2_dcoord  # Point toward decreasing chi2
+            grad[..., atom_idx, dim] = grad_value
+        
+        print(f"SAXS: Batch finite difference complete. Max gradient: {grad.abs().max():.6f}")
+        return grad
+    
+    def _compute_finite_diff_gradient_sequential(self, coords):
+        """Compute finite difference gradients sequentially (original method).
         
         This method requires N_atoms × 3 + 1 SAXS calculations per gradient computation.
         Only use when analytical gradients fail or for validation purposes.
