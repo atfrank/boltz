@@ -150,6 +150,7 @@ def load_input(
                     force_ramping=rg_data.get("force_ramping", True),
                     min_force_constant=rg_data.get("min_force_constant", 1.0),
                     ramping_steps=rg_data.get("ramping_steps", 50),
+                    raw_guidance_weight=rg_data.get("raw_guidance_weight", 0.0),
                 )
             
             if saxs_config or rg_config:

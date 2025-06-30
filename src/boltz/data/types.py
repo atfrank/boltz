@@ -663,6 +663,7 @@ class RgGuidanceConfig:
     force_ramping: bool = True  # Gradually increase force constant
     min_force_constant: float = 1.0  # Starting force constant for ramping
     ramping_steps: int = 50  # Steps to reach full force constant
+    raw_guidance_weight: float = 0.0  # Weight for applying guidance to raw noisy coordinates before denoising
 
 
 @dataclass(frozen=True)

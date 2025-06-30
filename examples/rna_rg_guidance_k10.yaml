@@ -8,9 +8,11 @@ sequences:
 guidance:
   rg:
     # Option 1: Specify target Rg directly (in Angstroms)
-    target_rg: 24.5
+    target_rg: 19.0
     force_constant: 100.0  # kcal/mol/Å² - start lower, adaptive increase
     mass_weighted: true
+    robust_mode: true
+    raw_guidance_weight: 50.0
     
     # Optional: extract target from experimental SAXS via Guinier analysis
     # saxs_file_path: "./examples/set_2.dat"

@@ -633,6 +633,7 @@ def process_input(  # noqa: C901, PLR0912, PLR0915, D103
                     "force_ramping": target.guidance.rg.force_ramping,
                     "min_force_constant": target.guidance.rg.min_force_constant,
                     "ramping_steps": target.guidance.rg.ramping_steps,
+                    "raw_guidance_weight": target.guidance.rg.raw_guidance_weight,
                 } if target.guidance.rg else None
             }
             with guidance_path.open("w") as f:

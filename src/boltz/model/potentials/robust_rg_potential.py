@@ -95,6 +95,77 @@ class RobustRgPotential(RadiusOfGyrationPotential):
         current_k = self.min_force_constant + progress * (self.original_force_constant - self.min_force_constant)
         return current_k
     
+    def compute_gradient_friendly_rg(self, coords: torch.Tensor, masses: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute radius of gyration in a gradient-friendly way (no median operations).
+        
+        This version computes Rg directly on the full tensor without indexing operations
+        that can break gradient flow.
+        """
+        # Ensure we're working with float32 for gradient computation
+        original_dtype = coords.dtype
+        if coords.dtype != torch.float32:
+            coords = coords.float()
+        
+        # Work directly with the tensor shape to avoid gradient-breaking operations
+        if coords.ndim == 3:
+            # Shape: [batch_size, num_atoms, 3] 
+            # Compute Rg for all samples, then weight to select only first sample
+            batch_size, num_atoms, _ = coords.shape
+            
+            # Compute center of mass for each sample
+            com_per_sample = torch.mean(coords, dim=1)  # [batch_size, 3]
+            
+            # Compute deviations for all samples
+            deviations_all = coords - com_per_sample.unsqueeze(1)  # [batch_size, num_atoms, 3]
+            
+            # Compute squared distances for all samples
+            distances_sq_all = torch.sum(deviations_all * deviations_all, dim=2)  # [batch_size, num_atoms]
+            
+            # Compute Rg for each sample
+            rg_squared_all = torch.mean(distances_sq_all, dim=1)  # [batch_size]
+            
+            # Create weights to select only the first sample (preserves gradients)
+            weights = torch.zeros(batch_size, device=coords.device, dtype=coords.dtype)
+            weights[0] = 1.0
+            
+            # Weighted average to effectively select first sample
+            rg_squared = torch.sum(rg_squared_all * weights)  # []
+            
+        elif coords.ndim == 4:
+            # Shape: [batch1, batch2, num_atoms, 3] - flatten first two dimensions temporarily
+            b1, b2, num_atoms, coord_dim = coords.shape
+            coords_flat = coords.view(b1 * b2, num_atoms, coord_dim)  # [b1*b2, num_atoms, 3]
+            
+            # Compute using the 3D logic
+            com_per_sample = torch.mean(coords_flat, dim=1)  # [b1*b2, 3]
+            deviations_all = coords_flat - com_per_sample.unsqueeze(1)  # [b1*b2, num_atoms, 3]
+            distances_sq_all = torch.sum(deviations_all * deviations_all, dim=2)  # [b1*b2, num_atoms]
+            rg_squared_all = torch.mean(distances_sq_all, dim=1)  # [b1*b2]
+            
+            # Select first sample
+            weights = torch.zeros(b1 * b2, device=coords.device, dtype=coords.dtype)
+            weights[0] = 1.0
+            rg_squared = torch.sum(rg_squared_all * weights)
+            
+        elif coords.ndim == 2:
+            # Shape: [num_atoms, 3] -> use directly
+            com = torch.mean(coords, dim=0)
+            deviations = coords - com.unsqueeze(0)
+            distances_sq = torch.sum(deviations * deviations, dim=1)
+            rg_squared = torch.mean(distances_sq)
+            
+        else:
+            raise ValueError(f"Unexpected coordinate dimensions: {coords.shape}")
+        
+        # Compute final Rg
+        rg = torch.sqrt(rg_squared + 1e-6)  # Small epsilon for numerical stability
+        
+        # Convert back to original dtype if needed
+        if original_dtype != torch.float32:
+            rg = rg.to(original_dtype)
+        
+        return rg
+
     def compute_robust_rg(self, coords: torch.Tensor, masses: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, dict]:
         """Compute radius of gyration with outlier protection.
         

@@ -1771,7 +1771,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             rg_params = guidance_section["rg"]
             
             # Debug: Print the actual rg_params being parsed from YAML
-            print(f"SCHEMA DEBUG: rg_params from YAML = {rg_params}")
             
             # Validate that either target_rg, saxs_file_path, or reference_pdb_path is provided
             if "target_rg" not in rg_params and "saxs_file_path" not in rg_params and "reference_pdb_path" not in rg_params:
@@ -1786,11 +1785,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             gradient_capping_val = rg_params.get("gradient_capping", 10.0)
             outlier_threshold_val = rg_params.get("outlier_threshold", 3.0)
             
-            print(f"SCHEMA DEBUG: Constructing RgGuidanceConfig with:")
-            print(f"  force_ramping={force_ramping_val}")
-            print(f"  max_displacement_per_step={max_displacement_val}")
-            print(f"  gradient_capping={gradient_capping_val}")
-            print(f"  outlier_threshold={outlier_threshold_val}")
             
             rg_config = RgGuidanceConfig(
                 target_rg=target_rg_val,
@@ -1813,9 +1807,9 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 force_ramping=force_ramping_val,
                 min_force_constant=rg_params.get("min_force_constant", 1.0),
                 ramping_steps=rg_params.get("ramping_steps", 50),
+                raw_guidance_weight=rg_params.get("raw_guidance_weight", 0.0),
             )
             
-            print(f"SCHEMA DEBUG: Created RgGuidanceConfig object: {rg_config}")
         
         if saxs_config or rg_config:
             guidance_config = GuidanceConfig(saxs=saxs_config, rg=rg_config)

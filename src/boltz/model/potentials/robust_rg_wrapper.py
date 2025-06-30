@@ -96,6 +96,9 @@ class RobustRgPotentialWrapper(Potential):
         
         print(f"Initialized RobustRgPotentialWrapper with {rg_calculation_method} Rg calculation")
         print(f"Force constant: {rg_config.force_constant} → ramping: {force_ramping}")
+        
+        # Raw guidance tracking
+        self._raw_guidance_enabled = False
     
     def set_step_info(self, diffusion_step: int, guidance_step: int = 0):
         """Set step information for proper logging control."""
@@ -120,6 +123,204 @@ class RobustRgPotentialWrapper(Potential):
                   f"(before optimization)")
         except Exception as e:
             print(f"Warning: Failed to compute raw Rg for step {step_idx}: {e}")
+    
+    def apply_raw_guidance(self, coords: torch.Tensor, feats: dict, parameters: dict, sigma: float, step_idx: int) -> torch.Tensor:
+        """Apply Rg guidance to raw noisy coordinates before neural network denoising.
+        
+        Args:
+            coords: Raw noisy coordinates [batch, num_atoms, 3]
+            feats: Feature dictionary
+            parameters: Potential parameters including raw_guidance_weight
+            sigma: Current noise level
+            step_idx: Current diffusion step
+            
+        Returns:
+            Modified coordinates with Rg guidance applied
+        """
+        try:
+            raw_guidance_weight = parameters.get("raw_guidance_weight", 0.0)
+            if raw_guidance_weight <= 0:
+                return coords
+                
+            # Note: Raw coordinate guidance is experimental due to gradient flow challenges
+            # in the diffusion framework. Current implementation works for first few steps.
+                
+            # Enable tracking for logging
+            if not self._raw_guidance_enabled:
+                self._raw_guidance_enabled = True
+                print(f"Raw coordinate Rg guidance activated with weight {raw_guidance_weight}")
+            
+            # First compute Rg for logging (use robust version)
+            current_rg_log, com, rg_info = self.rg_potential.compute_robust_rg(coords, masses=None)
+            
+            # Compute Rg error for condition check
+            target_rg = self.rg_potential.target_rg
+            rg_error_log = current_rg_log - target_rg
+            
+            # Adaptive guidance strength based on noise level
+            # Higher noise = weaker guidance to avoid overwhelming the diffusion process
+            # Log noise levels for first step only
+            if step_idx == 0:
+                print(f"Raw guidance step {step_idx}: sigma={sigma:.1f}")
+            
+            # Adjust max_sigma based on observed values - it appears to be much higher than expected
+            max_sigma = 800.0  # Further increased based on observed sigma values up to ~671
+            noise_factor = max(0.0, 1.0 - (sigma / max_sigma))  # 0 at max noise, 1 at no noise, clamp to [0,1]
+            adaptive_strength = raw_guidance_weight * noise_factor * 0.01  # Very small for stability with finite differences
+            
+            # Apply guidance if we have reasonable noise factor
+            # Don't require small error since initial structures can be very wrong
+            if noise_factor > 0.05:  # Apply guidance when noise is not too high
+                # Robust gradient computation for raw coordinate guidance
+                try:
+                    # Disable autocast to prevent mixed precision issues that break gradients
+                    with torch.cuda.amp.autocast(enabled=False):
+                        # Use a no_grad context first to avoid interfering with existing gradients
+                        with torch.no_grad():
+                            # Create a fresh copy for gradient computation, ensuring float32 precision
+                            coords_for_grad = coords.detach().clone()
+                            
+                            # Force float32 precision to avoid mixed precision issues
+                            if coords_for_grad.dtype != torch.float32:
+                                coords_for_grad = coords_for_grad.float()
+                        
+                        # Now enable gradients on the clean copy
+                        coords_for_grad.requires_grad_(True)
+                        
+                        # Ensure gradient computation context
+                        with torch.enable_grad():
+                            # Use gradient-friendly Rg computation
+                            rg_for_grad = self.rg_potential.compute_gradient_friendly_rg(coords_for_grad, masses=None)
+                        
+                        # Check if autograd gradients are available, otherwise use finite differences
+                        if rg_for_grad.requires_grad and rg_for_grad.grad_fn is not None:
+                            # Try autograd first (faster when it works)
+                            rg_error_for_grad = rg_for_grad - target_rg
+                            try:
+                                rg_grad = torch.autograd.grad(
+                                    outputs=rg_for_grad,
+                                    inputs=coords_for_grad,
+                                    create_graph=False,
+                                    retain_graph=False,
+                                    allow_unused=False
+                                )[0]
+                                if step_idx == 0:
+                                    print(f"Raw guidance step {step_idx}: Using autograd gradients")
+                            except RuntimeError:
+                                # Autograd failed, will fall back to finite differences
+                                rg_grad = None
+                        else:
+                            rg_grad = None
+                        
+                        # Fallback to finite differences if autograd failed
+                        if rg_grad is None:
+                            if step_idx == 0:
+                                print(f"Raw guidance step {step_idx}: Using finite difference gradients")
+                            
+                            # Simplified finite differences approach
+                            eps = 1e-3
+                            
+                            # Compute base Rg value
+                            rg_base = self.rg_potential.compute_gradient_friendly_rg(coords_for_grad, masses=None)
+                            
+                            # Initialize gradient tensor
+                            rg_grad = torch.zeros_like(coords_for_grad)
+                            
+                            # Compute gradients for first sample only (handle batch dimension properly)
+                            if coords_for_grad.ndim == 3:
+                                sample_coords = coords_for_grad[0]  # [num_atoms, 3]
+                                sample_grad = torch.zeros_like(sample_coords)
+                                
+                                # Compute gradients atom by atom to avoid memory issues
+                                for i in range(sample_coords.shape[0]):  # atoms
+                                    for j in range(3):  # x, y, z
+                                        # Create perturbed coordinates
+                                        coords_pert = coords_for_grad.clone()
+                                        coords_pert[0, i, j] += eps
+                                        
+                                        # Compute perturbed Rg
+                                        rg_pert = self.rg_potential.compute_gradient_friendly_rg(coords_pert, masses=None)
+                                        
+                                        # Finite difference
+                                        sample_grad[i, j] = (rg_pert - rg_base) / eps
+                                
+                                rg_grad[0] = sample_grad
+                            else:
+                                # Handle 2D case
+                                for i in range(coords_for_grad.shape[0]):
+                                    for j in range(3):
+                                        coords_pert = coords_for_grad.clone()
+                                        coords_pert[i, j] += eps
+                                        rg_pert = self.rg_potential.compute_gradient_friendly_rg(coords_pert, masses=None)
+                                        rg_grad[i, j] = (rg_pert - rg_base) / eps
+                            
+                            rg_error_for_grad = rg_base - target_rg
+                        
+                        # Verify gradient was computed successfully
+                        if rg_grad is None or torch.isnan(rg_grad).any() or torch.isinf(rg_grad).any():
+                            if step_idx % 10 == 0:
+                                print(f"Raw guidance step {step_idx}: Invalid gradients computed, skipping")
+                            return coords
+                        
+                except Exception as e:
+                    if step_idx % 10 == 0:  # Log occasionally to avoid spam
+                        print(f"Raw guidance step {step_idx}: Gradient computation failed: {e}")
+                    return coords
+                
+                # Apply guidance force: F = -k * (Rg - Rg_target) * dRg/dr
+                guidance_force = -adaptive_strength * rg_error_for_grad * rg_grad
+                
+                # Ensure guidance force is in the same dtype and device as original coords
+                if guidance_force.dtype != coords.dtype:
+                    guidance_force = guidance_force.to(coords.dtype)
+                if guidance_force.device != coords.device:
+                    guidance_force = guidance_force.to(coords.device)
+                
+                # Clip gradients to prevent instability
+                max_force = 0.5  # Reduced maximum force per atom for stability
+                force_norm = torch.norm(guidance_force, dim=-1, keepdim=True)
+                force_clip_mask = force_norm > max_force
+                if force_clip_mask.any():
+                    guidance_force[force_clip_mask.squeeze(-1)] *= (max_force / force_norm[force_clip_mask])
+                
+                # Reshape guidance force to match original coordinates shape
+                if coords.ndim == 3:
+                    # guidance_force is [num_atoms, 3], coords is [batch_size, num_atoms, 3]
+                    batch_size = coords.shape[0]
+                    guidance_force_batch = torch.zeros_like(coords)
+                    guidance_force_batch[0] = guidance_force  # Apply to first sample only
+                    guidance_force = guidance_force_batch
+                elif coords.ndim == 4:
+                    # guidance_force is [num_atoms, 3], coords is [batch1, batch2, num_atoms, 3]
+                    batch1, batch2 = coords.shape[0], coords.shape[1]
+                    guidance_force_batch = torch.zeros_like(coords)
+                    guidance_force_batch[0, 0] = guidance_force  # Apply to first sample only
+                    guidance_force = guidance_force_batch
+                
+                # Apply the guidance
+                coords_guided = coords + guidance_force
+                
+                # Log raw guidance application
+                if step_idx == 0 or step_idx % 5 == 0:  # Log first step and every 5 steps
+                    print(f"Raw guidance step {step_idx}: "
+                          f"sigma={sigma:.1f} "
+                          f"Rg={current_rg_log.item():.1f}Å "
+                          f"target={target_rg:.1f}Å "
+                          f"error={rg_error_log.item():.1f}Å "
+                          f"noise_factor={noise_factor:.3f} "
+                          f"strength={adaptive_strength:.6f} "
+                          f"max_force={guidance_force.abs().max().item():.6f}")
+                
+                return coords_guided
+            else:
+                # Log why we're skipping raw guidance (first few steps only)
+                if step_idx <= 2:
+                    print(f"Raw guidance step {step_idx}: skipping - noise_factor={noise_factor:.3f} (too high noise)")
+                return coords
+                
+        except Exception as e:
+            print(f"Warning: Raw guidance failed at step {step_idx}: {e}")
+            return coords
         
     def compute_args(self, feats, parameters):
         """Compute arguments for the potential."""

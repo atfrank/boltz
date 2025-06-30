@@ -1,0 +1,20 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: "CGCGAATTCGCG"
+
+guidance:
+  rg:
+    target_rg: 24.5
+    force_constant: 100.0
+    mass_weighted: true
+    robust_mode: true
+    force_ramping: true
+    min_force_constant: 1.0
+    ramping_steps: 50
+    max_displacement_per_step: 2.0
+    outlier_threshold: 3.0
+    rg_calculation_method: "robust"
+    gradient_capping: 10.0
+    raw_guidance_weight: 50.0  # Enable raw coordinate guidance

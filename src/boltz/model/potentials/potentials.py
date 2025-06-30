@@ -504,14 +504,10 @@ def get_potentials(saxs_guidance_config=None, rg_guidance_config=None):
             # Use robust Rg potential with outlier protection
             from boltz.model.potentials.robust_rg_wrapper import RobustRgPotentialWrapper
             
-            # Debug: Check what values we're actually getting
-            print(f"POTENTIALS DEBUG: rg_guidance_config object = {rg_guidance_config}")
-            print(f"POTENTIALS DEBUG: hasattr force_ramping = {hasattr(rg_guidance_config, 'force_ramping')}")
-            print(f"POTENTIALS DEBUG: direct access rg_guidance_config.force_ramping = {rg_guidance_config.force_ramping if hasattr(rg_guidance_config, 'force_ramping') else 'NOT FOUND'}")
+            # Extract robust mode configuration parameters
             force_ramping_val = getattr(rg_guidance_config, 'force_ramping', True)
             max_displacement_val = getattr(rg_guidance_config, 'max_displacement_per_step', 2.0)
             gradient_capping_val = getattr(rg_guidance_config, 'gradient_capping', 10.0)
-            print(f"POTENTIALS DEBUG: force_ramping={force_ramping_val}, max_displacement={max_displacement_val}, gradient_capping={gradient_capping_val}")
             
             rg_potential = RobustRgPotentialWrapper(
                 rg_config=rg_guidance_config,
@@ -520,6 +516,7 @@ def get_potentials(saxs_guidance_config=None, rg_guidance_config=None):
                     "guidance_weight": max(rg_guidance_config.force_constant / 1.0, 0.01),  # No scaling to test optimal force constant
                     "resampling_weight": 0.1,  # Moderate resampling weight
                     "rg_scale": 1.0,
+                    "raw_guidance_weight": getattr(rg_guidance_config, 'raw_guidance_weight', 0.0),  # Raw coordinate guidance
                 },
                 # Pass robustness parameters from YAML config
                 max_displacement_per_step=max_displacement_val,

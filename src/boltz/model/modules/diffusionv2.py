@@ -573,6 +573,19 @@ class AtomDiffusion(Module):
             # Apply noise to entire system (maintains physical coherence)
             atom_coords_noisy = atom_coords + eps
 
+            # Apply raw coordinate guidance before neural network denoising
+            for potential in potentials:
+                if hasattr(potential, 'apply_raw_guidance'):
+                    parameters = potential.compute_parameters(steering_t)
+                    if parameters and parameters.get("raw_guidance_weight", 0) > 0:
+                        atom_coords_noisy = potential.apply_raw_guidance(
+                            atom_coords_noisy, 
+                            network_condition_kwargs["feats"],
+                            parameters,
+                            sigma_t,  # Current noise level
+                            step_idx
+                        )
+
             with torch.no_grad():
                 atom_coords_denoised = torch.zeros_like(atom_coords_noisy)
                 sample_ids = torch.arange(multiplicity).to(atom_coords_noisy.device)

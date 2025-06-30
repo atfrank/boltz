@@ -4,6 +4,8 @@
 
 Boltz uses a diffusion-based approach for structure prediction where the model learns to gradually denoise random coordinates into meaningful protein/RNA structures. Understanding this process is crucial for interpreting trajectories and guidance behavior.
 
+**Note**: This document also covers the new **Raw Coordinate Guidance** feature that can apply shape restraints before neural network denoising.
+
 ## The Two Coordinate Systems
 
 During diffusion, Boltz maintains **two distinct coordinate systems**:
@@ -94,10 +96,22 @@ MODEL 50  # Final: Final structure (Rg ~21Å)
 
 ## Guidance and Steering
 
-### Where Potentials Operate
+Boltz supports two types of guidance that operate at different stages:
+
+### 1. Standard Guidance (Default)
 - **Input**: `atom_coords_denoised` (clean neural network predictions)
 - **Process**: Multiple gradient descent steps to optimize structure
 - **Output**: Improved coordinates fed back into diffusion process
+- **When**: After neural network denoising at each diffusion step
+- **Advantages**: Stable, reliable, works throughout diffusion
+
+### 2. Raw Coordinate Guidance (Optional)
+- **Input**: `atom_coords_noisy` (raw diffusion coordinates before denoising)
+- **Process**: Direct force application using finite difference gradients
+- **Output**: Modified raw coordinates before neural network processing
+- **When**: Before neural network denoising (only at low noise levels)
+- **Advantages**: Additional early-stage steering, complements standard guidance
+- **Configuration**: Set `raw_guidance_weight > 0` in YAML file
 
 ### Why Rg Logging Differs from Raw Trajectory
 - **Rg logging**: Measures denoised coordinates (~21Å consistently)
@@ -142,7 +156,9 @@ sigma_min = 0.4    # Almost clean
 1. **Two coordinate systems** serve different purposes in diffusion
 2. **Denoised coordinates** are what you should analyze for structure quality
 3. **Raw coordinates** show the mathematical diffusion process
-4. **Guidance operates** on clean structures, not noisy ones
-5. **Both trajectories** provide complementary information about the prediction process
+4. **Standard guidance operates** on clean structures (denoised coordinates)
+5. **Raw guidance** can optionally operate on noisy coordinates before denoising
+6. **Both trajectories** provide complementary information about the prediction process
+7. **Dual guidance** provides maximum control over structure formation
 
 This dual-trajectory system provides complete insight into both the diffusion mathematics and the structural biology, enabling better understanding and debugging of the prediction process.
