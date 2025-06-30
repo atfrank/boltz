@@ -13,6 +13,9 @@ from torch import Tensor, from_numpy
 from torch.nn.functional import one_hot
 
 from boltz.data import const
+
+# Import optimization flags
+from boltz.model.potentials.optimizations import use_cuda_optimizations
 from boltz.data.mol import (
     get_amino_acids_symmetries,
     get_chain_symmetries,
@@ -176,7 +179,35 @@ def compute_frames_nonpolymer(
     return frame_data, resolved_frame_data & mask_collinear
 
 
+def compute_collinear_mask_gpu(v1, v2):
+    """GPU-optimized version of collinear mask computation."""
+    # Convert to torch tensors if needed
+    if isinstance(v1, np.ndarray):
+        v1 = torch.from_numpy(v1).cuda() if torch.cuda.is_available() else torch.from_numpy(v1)
+    if isinstance(v2, np.ndarray):
+        v2 = torch.from_numpy(v2).cuda() if torch.cuda.is_available() else torch.from_numpy(v2)
+    
+    # GPU-accelerated computations
+    norm1 = torch.norm(v1, dim=1, keepdim=True)
+    norm2 = torch.norm(v2, dim=1, keepdim=True)
+    
+    v1_normalized = v1 / (norm1 + 1e-6)
+    v2_normalized = v2 / (norm2 + 1e-6)
+    
+    mask_angle = torch.abs(torch.sum(v1_normalized * v2_normalized, dim=1)) < 0.9063
+    mask_overlap1 = norm1.squeeze() > 1e-2
+    mask_overlap2 = norm2.squeeze() > 1e-2
+    
+    result = mask_angle & mask_overlap1 & mask_overlap2
+    return result.cpu().numpy()
+
+
 def compute_collinear_mask(v1, v2):
+    """Compute collinear mask with GPU optimization when available."""
+    if use_cuda_optimizations() and torch.cuda.is_available():
+        return compute_collinear_mask_gpu(v1, v2)
+    
+    # Original CPU implementation
     norm1 = np.linalg.norm(v1, axis=1, keepdims=True)
     norm2 = np.linalg.norm(v2, axis=1, keepdims=True)
     v1 = v1 / (norm1 + 1e-6)

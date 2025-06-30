@@ -6,6 +6,9 @@ from torch import Tensor, nn
 
 import boltz.model.layers.initialize as init
 
+# Import optimization flags
+from boltz.model.potentials.optimizations import use_cuda_optimizations
+
 
 class AttentionPairBias(nn.Module):
     """Attention pair bias layer."""
@@ -97,14 +100,34 @@ class AttentionPairBias(nn.Module):
         g = self.proj_g(s).sigmoid()
 
         with torch.autocast("cuda", enabled=False):
-            # Compute attention weights
-            attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
-            attn = attn / (self.head_dim**0.5) + bias.float()
-            attn = attn + (1 - mask[:, None, None].float()) * -self.inf
-            attn = attn.softmax(dim=-1)
+            if use_cuda_optimizations():
+                # Memory-optimized attention computation with in-place operations
+                attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
+                attn.div_(self.head_dim**0.5)  # In-place division
+                attn.add_(bias.float())  # In-place addition
+                
+                # Create mask and apply in-place
+                mask_expanded = (1 - mask[:, None, None].float())
+                mask_expanded.mul_(-self.inf)  # In-place multiplication
+                attn.add_(mask_expanded)  # In-place masked addition
+                
+                attn.softmax_(dim=-1)  # In-place softmax
+                
+                # Compute output with memory-efficient einsum
+                o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype)
+                
+                # Clean up intermediate tensors to free memory
+                del attn, mask_expanded
+                
+            else:
+                # Original attention computation
+                attn = torch.einsum("bihd,bjhd->bhij", q.float(), k.float())
+                attn = attn / (self.head_dim**0.5) + bias.float()
+                attn = attn + (1 - mask[:, None, None].float()) * -self.inf
+                attn = attn.softmax(dim=-1)
 
-            # Compute output
-            o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype)
+                # Compute output
+                o = torch.einsum("bhij,bjhd->bihd", attn, v.float()).to(v.dtype)
         o = o.reshape(B, -1, self.c_s)
         o = self.proj_o(g * o)
 

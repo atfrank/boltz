@@ -36,6 +36,9 @@ from boltz.model.modules.trunkv2 import (
 from boltz.model.optim.ema import EMA
 from boltz.model.optim.scheduler import AlphaFoldLRScheduler
 
+# Import optimization flags
+from boltz.model.potentials.optimizations import use_cuda_optimizations
+
 
 class Boltz2(LightningModule):
     """Boltz2 model."""
@@ -196,6 +199,9 @@ class Boltz2(LightningModule):
             cutoff_min=conditioning_cutoff_min,
             cutoff_max=conditioning_cutoff_max,
         )
+
+        # Initialize caching for relative position encoding
+        self._rel_pos_cache = {} if use_cuda_optimizations() else None
 
         # Normalization layers
         self.s_norm = nn.LayerNorm(token_s)
@@ -415,7 +421,26 @@ class Boltz2(LightningModule):
                 self.z_init_1(s_inputs)[:, :, None]
                 + self.z_init_2(s_inputs)[:, None, :]
             )
-            relative_position_encoding = self.rel_pos(feats)
+            # Use cached relative position encoding if optimizations enabled
+            if self._rel_pos_cache is not None:
+                # Create cache key from sequence length and relevant features
+                seq_len = feats["token_pad_mask"].shape[1]
+                # Use token positions hash as part of cache key
+                pos_hash = hash(tuple(feats.get("token_positions", torch.zeros(seq_len)).cpu().numpy()))
+                cache_key = (seq_len, pos_hash)
+                
+                if cache_key not in self._rel_pos_cache:
+                    self._rel_pos_cache[cache_key] = self.rel_pos(feats)
+                    # Limit cache size to prevent memory bloat
+                    if len(self._rel_pos_cache) > 10:
+                        # Remove oldest entry (simple LRU approximation)
+                        oldest_key = next(iter(self._rel_pos_cache))
+                        del self._rel_pos_cache[oldest_key]
+                
+                relative_position_encoding = self._rel_pos_cache[cache_key]
+            else:
+                relative_position_encoding = self.rel_pos(feats)
+            
             z_init = z_init + relative_position_encoding
             z_init = z_init + self.token_bonds(feats["token_bonds"].float())
             if self.bond_type_feature:

@@ -23,6 +23,9 @@ from boltz.data.types import (
     StructureV2,
 )
 
+# Import optimization flags
+from boltz.model.potentials.optimizations import use_cuda_optimizations
+
 
 def load_input(
     record: Record,
@@ -167,8 +170,64 @@ def load_input(
     )
 
 
+def collate_optimized(data: list[dict[str, Tensor]]) -> dict[str, Tensor]:
+    """Memory-optimized collate function with pre-allocated tensors."""
+    if not data:
+        return {}
+    
+    batch_size = len(data)
+    keys = data[0].keys()
+    collated = {}
+    
+    # Keys that should not be stacked/padded
+    no_stack_keys = {
+        "all_coords", "all_resolved_mask", "crop_to_all_atom_map",
+        "chain_symmetries", "amino_acids_symmetries", "ligand_symmetries",
+        "record", "affinity_mw", "structure", "guidance"
+    }
+    
+    for key in keys:
+        if key in no_stack_keys:
+            # Just collect these without stacking
+            collated[key] = [d[key] for d in data]
+            continue
+            
+        # Get first tensor to determine properties
+        first_tensor = data[0][key]
+        if not isinstance(first_tensor, torch.Tensor):
+            collated[key] = [d[key] for d in data]
+            continue
+            
+        # Check if all tensors have the same shape
+        shapes = [d[key].shape for d in data]
+        if all(shape == shapes[0] for shape in shapes):
+            # All same shape - can stack efficiently
+            batch_shape = (batch_size,) + first_tensor.shape
+            try:
+                # Pre-allocate the batch tensor
+                collated_tensor = torch.empty(
+                    batch_shape, 
+                    dtype=first_tensor.dtype, 
+                    device=first_tensor.device
+                )
+                # Copy data in-place
+                for i, sample in enumerate(data):
+                    collated_tensor[i].copy_(sample[key])
+                collated[key] = collated_tensor
+            except Exception:
+                # Fallback to standard stacking
+                collated[key] = torch.stack([d[key] for d in data], dim=0)
+        else:
+            # Different shapes - need padding (fallback to original method)
+            values = [d[key] for d in data]
+            values, _ = pad_to_max(values, 0)
+            collated[key] = values
+    
+    return collated
+
+
 def collate(data: list[dict[str, Tensor]]) -> dict[str, Tensor]:
-    """Collate the data.
+    """Collate the data with optimization routing.
 
     Parameters
     ----------
@@ -181,6 +240,11 @@ def collate(data: list[dict[str, Tensor]]) -> dict[str, Tensor]:
         The collated data.
 
     """
+    # Route to optimized version if CUDA optimizations enabled
+    if use_cuda_optimizations():
+        return collate_optimized(data)
+    
+    # Original implementation for compatibility
     # Get the keys
     keys = data[0].keys()
 
