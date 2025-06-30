@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Test optimal configuration for Rg convergence
+guidance:
+  rg:
+    target_rg: 30.0  # Higher target to test expansion
+    force_constant: 200.0  # Higher force constant for stronger guidance
+    mass_weighted: true
+    
+    # Optimal robustness parameters
+    robust_mode: true
+    force_ramping: false  # Disable ramping to use full force immediately
+    max_displacement_per_step: 5.0  # Allow larger movements
+    outlier_threshold: 2.0  # More sensitive outlier detection
+    rg_calculation_method: "robust"
+    gradient_capping: 50.0  # Higher gradient cap for stronger forces
+    min_force_constant: 200.0  # Not used when ramping is disabled
+    ramping_steps: 1  # Not used when ramping is disabled
+
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

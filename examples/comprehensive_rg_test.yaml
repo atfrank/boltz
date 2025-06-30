@@ -1,0 +1,32 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Comprehensive test of all Rg guidance parameters
+guidance:
+  rg:
+    # Target specification (using PDB)
+    reference_pdb_path: "./examples/reference_structure.pdb"
+    pdb_chain_id: "A"
+    pdb_atom_selection: "all"
+    
+    # Force parameters
+    force_constant: 150.0
+    mass_weighted: true
+    
+    # Robustness parameters - all explicitly set
+    robust_mode: true
+    max_displacement_per_step: 4.5
+    outlier_threshold: 2.0
+    rg_calculation_method: "robust"
+    gradient_capping: 30.0
+    
+    # Force ramping parameters
+    force_ramping: false
+    min_force_constant: 200.0  # Won't be used since ramping is disabled
+    ramping_steps: 100         # Won't be used since ramping is disabled
+
+output:
+  confidence_detailed: true

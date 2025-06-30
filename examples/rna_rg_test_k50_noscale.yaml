@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Test force_constant = 50 with no guidance_weight scaling
+guidance:
+  rg:
+    target_rg: 24.5
+    force_constant: 50.0  # Test moderate force constant with no scaling
+    mass_weighted: true
+    
+    # Robust features
+    robust_mode: true
+    max_displacement_per_step: 3.0
+    outlier_threshold: 3.0
+    rg_calculation_method: "robust"
+    gradient_capping: 15.0
+    force_ramping: true
+    min_force_constant: 10.0
+    ramping_steps: 30
+
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

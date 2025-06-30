@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Extract target Rg from experimental SAXS data using Guinier analysis
+guidance:
+  rg:
+    # Extract Rg from experimental SAXS data
+    saxs_file_path: "./examples/set_2.dat"
+    q_min: 0.01  # Minimum q for Guinier fit (Å⁻¹)
+    q_max: 0.05  # Maximum q for Guinier fit (Å⁻¹)
+    
+    # Guidance parameters
+    force_constant: 15.0  # kcal/mol/Å²
+    mass_weighted: true
+
+# SAXS scoring for final structure evaluation
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"
+    
+# Optional: Generate multiple samples to compare SAXS fits
+sampling:
+  n_samples: 10  # Generate 10 structures to compare SAXS scores

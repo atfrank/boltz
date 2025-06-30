@@ -99,6 +99,62 @@ def load_input(
             with extra_mol_path.open("rb") as f:
                 extra_mols = pickle.load(f)  # noqa: S301
 
+    # Load guidance configuration
+    guidance = None
+    if constraints_dir is not None:
+        import json
+        from boltz.data.types import GuidanceConfig, SAXSGuidanceConfig, RgGuidanceConfig
+        
+        guidance_path = constraints_dir / f"{record.id}_guidance.json"
+        if guidance_path.exists():
+            with guidance_path.open("r") as f:
+                guidance_data = json.load(f)
+            
+            saxs_config = None
+            rg_config = None
+            
+            # Load SAXS guidance if present
+            if guidance_data.get("saxs"):
+                saxs_data = guidance_data["saxs"]
+                saxs_config = SAXSGuidanceConfig(
+                    experimental_data=saxs_data["experimental_data"],
+                    guidance_weight=saxs_data["guidance_weight"],
+                    guidance_interval=saxs_data["guidance_interval"],
+                    resampling_weight=saxs_data["resampling_weight"],
+                    voxel_size=saxs_data["voxel_size"],
+                    oversampling=saxs_data["oversampling"],
+                    gradient_epsilon=saxs_data["gradient_epsilon"],
+                )
+            
+            # Load Rg guidance if present
+            if guidance_data.get("rg"):
+                rg_data = guidance_data["rg"]
+                rg_config = RgGuidanceConfig(
+                    target_rg=rg_data.get("target_rg"),
+                    saxs_file_path=rg_data.get("saxs_file_path"),
+                    force_constant=rg_data.get("force_constant", 10.0),
+                    q_min=rg_data.get("q_min", 0.01),
+                    q_max=rg_data.get("q_max", 0.05),
+                    mass_weighted=rg_data.get("mass_weighted", True),
+                    atom_selection=rg_data.get("atom_selection"),
+                    # PDB target calculation parameters
+                    reference_pdb_path=rg_data.get("reference_pdb_path"),
+                    pdb_chain_id=rg_data.get("pdb_chain_id"),
+                    pdb_atom_selection=rg_data.get("pdb_atom_selection"),
+                    # Include robustness parameters from YAML
+                    robust_mode=rg_data.get("robust_mode", True),
+                    max_displacement_per_step=rg_data.get("max_displacement_per_step", 2.0),
+                    outlier_threshold=rg_data.get("outlier_threshold", 3.0),
+                    rg_calculation_method=rg_data.get("rg_calculation_method", "robust"),
+                    gradient_capping=rg_data.get("gradient_capping", 10.0),
+                    force_ramping=rg_data.get("force_ramping", True),
+                    min_force_constant=rg_data.get("min_force_constant", 1.0),
+                    ramping_steps=rg_data.get("ramping_steps", 50),
+                )
+            
+            if saxs_config or rg_config:
+                guidance = GuidanceConfig(saxs=saxs_config, rg=rg_config)
+
     return Input(
         structure,
         msas,
@@ -106,6 +162,7 @@ def load_input(
         residue_constraints=residue_constraints,
         templates=templates,
         extra_mols=extra_mols,
+        guidance=guidance,
     )
 
 
@@ -141,6 +198,7 @@ def collate(data: list[dict[str, Tensor]]) -> dict[str, Tensor]:
             "record",
             "affinity_mw",
             "structure",
+            "guidance",
         ]:
             # Check if all have the same shape
             shape = values[0].shape
@@ -295,8 +353,9 @@ class PredictionDataset(torch.utils.data.Dataset):
             print(f"Featurizer failed on {record.id} with error {e}. Skipping.")  # noqa: T201
             return self.__getitem__(0)
 
-        # Add record
+        # Add record and guidance
         features["record"] = record
+        features["guidance"] = input_data.guidance
         return features
 
     def __len__(self) -> int:
@@ -426,6 +485,7 @@ class Boltz2InferenceDataModule(pl.LightningDataModule):
                 "record",
                 "affinity_mw",
                 "structure",
+                "guidance",
             ]:
                 batch[key] = batch[key].to(device)
         return batch

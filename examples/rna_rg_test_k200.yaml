@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Test force_constant = 200 for Rg convergence
+guidance:
+  rg:
+    target_rg: 24.5
+    force_constant: 200.0  # Test higher force constant
+    mass_weighted: true
+    
+    # Robust features
+    robust_mode: true
+    max_displacement_per_step: 3.0  # Allow larger movements for structural change
+    outlier_threshold: 3.0
+    rg_calculation_method: "robust"
+    gradient_capping: 15.0  # Allow higher gradients
+    force_ramping: true
+    min_force_constant: 10.0  # Start higher
+    ramping_steps: 40  # More gradual ramping
+
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

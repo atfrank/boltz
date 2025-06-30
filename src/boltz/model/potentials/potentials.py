@@ -414,7 +414,7 @@ class PlanarBondPotential(FlatBottomPotential, AbsDihedralPotential):
         return improper_index, (k, lower_bounds, upper_bounds), None
 
 
-def get_potentials():
+def get_potentials(saxs_guidance_config=None, rg_guidance_config=None):
     potentials = [
         SymmetricChainCOMPotential(
             parameters={
@@ -479,6 +479,73 @@ def get_potentials():
             }
         ),
     ]
+    
+    # Add SAXS potential if guidance config is provided
+    if saxs_guidance_config is not None:
+        from boltz.model.potentials.saxs_potential import SAXSPotential
+        
+        saxs_potential = SAXSPotential(
+            experimental_saxs_file=saxs_guidance_config.experimental_data,
+            parameters={
+                "guidance_interval": saxs_guidance_config.guidance_interval,
+                "guidance_weight": saxs_guidance_config.guidance_weight,
+                "resampling_weight": saxs_guidance_config.resampling_weight,
+                "saxs_scale": 1.0,
+            },
+            voxel_size=saxs_guidance_config.voxel_size,
+            oversampling=saxs_guidance_config.oversampling,
+            gradient_epsilon=saxs_guidance_config.gradient_epsilon,
+        )
+        potentials.append(saxs_potential)
+    
+    # Add Rg potential if guidance config is provided  
+    if rg_guidance_config is not None:
+        if getattr(rg_guidance_config, 'robust_mode', True):
+            # Use robust Rg potential with outlier protection
+            from boltz.model.potentials.robust_rg_wrapper import RobustRgPotentialWrapper
+            
+            # Debug: Check what values we're actually getting
+            print(f"POTENTIALS DEBUG: rg_guidance_config object = {rg_guidance_config}")
+            print(f"POTENTIALS DEBUG: hasattr force_ramping = {hasattr(rg_guidance_config, 'force_ramping')}")
+            print(f"POTENTIALS DEBUG: direct access rg_guidance_config.force_ramping = {rg_guidance_config.force_ramping if hasattr(rg_guidance_config, 'force_ramping') else 'NOT FOUND'}")
+            force_ramping_val = getattr(rg_guidance_config, 'force_ramping', True)
+            max_displacement_val = getattr(rg_guidance_config, 'max_displacement_per_step', 2.0)
+            gradient_capping_val = getattr(rg_guidance_config, 'gradient_capping', 10.0)
+            print(f"POTENTIALS DEBUG: force_ramping={force_ramping_val}, max_displacement={max_displacement_val}, gradient_capping={gradient_capping_val}")
+            
+            rg_potential = RobustRgPotentialWrapper(
+                rg_config=rg_guidance_config,
+                parameters={
+                    "guidance_interval": 1,  # Apply every step for smooth guidance
+                    "guidance_weight": max(rg_guidance_config.force_constant / 1.0, 0.01),  # No scaling to test optimal force constant
+                    "resampling_weight": 0.1,  # Moderate resampling weight
+                    "rg_scale": 1.0,
+                },
+                # Pass robustness parameters from YAML config
+                max_displacement_per_step=max_displacement_val,
+                outlier_threshold=getattr(rg_guidance_config, 'outlier_threshold', 3.0),
+                rg_calculation_method=getattr(rg_guidance_config, 'rg_calculation_method', 'robust'),
+                gradient_capping=gradient_capping_val,
+                force_ramping=force_ramping_val,
+                min_force_constant=getattr(rg_guidance_config, 'min_force_constant', 1.0),
+                ramping_steps=getattr(rg_guidance_config, 'ramping_steps', 50),
+            )
+        else:
+            # Use original Rg potential for backward compatibility
+            from boltz.model.potentials.rg_potential_wrapper import RgPotentialWrapper
+            
+            rg_potential = RgPotentialWrapper(
+                rg_config=rg_guidance_config,
+                parameters={
+                    "guidance_interval": 1,  # Apply every step for smooth guidance
+                    "guidance_weight": max(rg_guidance_config.force_constant / 10.0, 0.01),  # Reduced scaling for effective guidance
+                    "resampling_weight": 0.1,  # Moderate resampling weight
+                    "rg_scale": 1.0,
+                }
+            )
+            
+        potentials.append(rg_potential)
+    
     return potentials
 
 

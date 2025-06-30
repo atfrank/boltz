@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guide to Integrating New Guiding Potentials in Boltz</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #3b82f6;
+            --background: #ffffff;
+            --surface: #f8fafc;
+            --text: #1e293b;
+            --text-light: #64748b;
+            --code-bg: #f1f5f9;
+            --code-border: #e2e8f0;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --info: #3b82f6;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background-color: var(--background);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 3rem 0;
+            margin-bottom: 3rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        nav {
+            background: var(--surface);
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 3rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        nav h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+        }
+
+        nav ul {
+            list-style: none;
+        }
+
+        nav li {
+            margin-bottom: 0.5rem;
+        }
+
+        nav a {
+            color: var(--text);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            display: block;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        nav a:hover {
+            background: var(--code-bg);
+            color: var(--primary-color);
+            transform: translateX(5px);
+        }
+
+        nav .sub-item {
+            margin-left: 2rem;
+            font-size: 0.9rem;
+        }
+
+        section {
+            margin-bottom: 3rem;
+        }
+
+        h2 {
+            font-size: 2rem;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--code-border);
+        }
+
+        h3 {
+            font-size: 1.5rem;
+            color: var(--text);
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        h4 {
+            font-size: 1.2rem;
+            color: var(--text);
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        p {
+            margin-bottom: 1rem;
+            line-height: 1.8;
+        }
+
+        code {
+            background: var(--code-bg);
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.9em;
+            color: var(--error);
+        }
+
+        pre {
+            background: var(--code-bg);
+            border: 1px solid var(--code-border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            position: relative;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+            color: var(--text);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .code-header {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: var(--primary-color);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0 8px 0 8px;
+            font-size: 0.8rem;
+            font-family: sans-serif;
+        }
+
+        ul, ol {
+            margin-left: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+        }
+
+        .alert {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            display: flex;
+            align-items: flex-start;
+        }
+
+        .alert-info {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 4px solid var(--info);
+        }
+
+        .alert-success {
+            background: rgba(16, 185, 129, 0.1);
+            border-left: 4px solid var(--success);
+        }
+
+        .alert-warning {
+            background: rgba(245, 158, 11, 0.1);
+            border-left: 4px solid var(--warning);
+        }
+
+        .alert-error {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 4px solid var(--error);
+        }
+
+        .alert-icon {
+            margin-right: 1rem;
+            font-size: 1.5rem;
+        }
+
+        .architecture-diagram {
+            background: var(--surface);
+            border: 2px dashed var(--code-border);
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            margin: 2rem 0;
+        }
+
+        .architecture-diagram .step {
+            background: white;
+            border: 2px solid var(--primary-color);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 0.5rem auto;
+            max-width: 400px;
+            font-weight: 500;
+        }
+
+        .architecture-diagram .arrow {
+            font-size: 1.5rem;
+            color: var(--primary-color);
+            margin: 0.5rem 0;
+        }
+
+        .highlight {
+            background: rgba(37, 99, 235, 0.1);
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+        }
+
+        .button {
+            display: inline-block;
+            background: var(--primary-color);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            margin-top: 1rem;
+        }
+
+        .button:hover {
+            background: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+        }
+
+        .step-card {
+            background: var(--surface);
+            border-radius: 8px;
+            padding: 2rem;
+            margin: 1.5rem 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .step-number {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            background: var(--primary-color);
+            color: white;
+            text-align: center;
+            line-height: 40px;
+            border-radius: 50%;
+            font-weight: bold;
+            margin-right: 1rem;
+        }
+
+        .file-path {
+            background: var(--code-bg);
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            margin: 0.5rem 0;
+            display: inline-block;
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 2rem;
+            }
+
+            nav {
+                padding: 1rem;
+            }
+
+            .container {
+                padding: 10px;
+            }
+
+            pre {
+                padding: 1rem;
+                font-size: 0.8rem;
+            }
+        }
+
+        .back-to-top {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--primary-color);
+            color: white;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+            opacity: 0;
+            visibility: hidden;
+        }
+
+        .back-to-top.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .back-to-top:hover {
+            background: var(--secondary-color);
+            transform: translateY(-5px);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>Guide to Integrating New Guiding Potentials in Boltz</h1>
+            <p>Comprehensive guide for adding experimental constraints to molecular structure prediction</p>
+        </div>
+    </header>
+
+    <div class="container">
+        <nav id="toc">
+            <h2>Table of Contents</h2>
+            <ul>
+                <li><a href="#overview">1. Overview</a></li>
+                <li><a href="#architecture">2. Architecture Overview</a></li>
+                <li><a href="#implementation">3. Step-by-Step Implementation</a>
+                    <ul class="sub-item">
+                        <li><a href="#step1">Step 1: Define Configuration</a></li>
+                        <li><a href="#step2">Step 2: Add YAML Parsing</a></li>
+                        <li><a href="#step3">Step 3: Update JSON Serialization</a></li>
+                        <li><a href="#step4">Step 4: Update JSON Deserialization</a></li>
+                        <li><a href="#step5">Step 5: Implement the Potential</a></li>
+                        <li><a href="#step6">Step 6: Integrate with System</a></li>
+                        <li><a href="#step7">Step 7: Add Confidence Scoring</a></li>
+                    </ul>
+                </li>
+                <li><a href="#testing">4. Testing and Validation</a></li>
+                <li><a href="#best-practices">5. Best Practices</a></li>
+                <li><a href="#example">6. Complete Example</a></li>
+                <li><a href="#troubleshooting">7. Troubleshooting</a></li>
+            </ul>
+        </nav>
+
+        <section id="overview">
+            <h2>1. Overview</h2>
+            <p>
+                Guiding potentials in Boltz allow users to steer the diffusion process toward structures 
+                that satisfy experimental constraints. Currently, Boltz supports SAXS (Small-Angle X-ray 
+                Scattering) and Rg (Radius of Gyration) guidance. This guide shows how to add new types 
+                of experimental guidance.
+            </p>
+
+            <div class="alert alert-info">
+                <span class="alert-icon">ℹ️</span>
+                <div>
+                    <strong>Key Components:</strong> Understanding the flow from user input to final 
+                    scoring is crucial for successful integration.
+                </div>
+            </div>
+
+            <h3>Key Components</h3>
+            <ol>
+                <li><strong>Data Types</strong> <span class="file-path">src/boltz/data/types.py</span>: Configuration dataclasses</li>
+                <li><strong>YAML Parsing</strong> <span class="file-path">src/boltz/data/parse/schema.py</span>: User input parsing</li>
+                <li><strong>JSON Serialization</strong> <span class="file-path">src/boltz/main.py</span>: Inter-process communication</li>
+                <li><strong>Data Loading</strong> <span class="file-path">src/boltz/data/module/inferencev2.py</span>: Runtime loading</li>
+                <li><strong>Potential Implementation</strong> <span class="file-path">src/boltz/model/potentials/</span>: Core logic</li>
+                <li><strong>Integration</strong> <span class="file-path">src/boltz/model/potentials/potentials.py</span>: System integration</li>
+                <li><strong>Confidence Scoring</strong> <span class="file-path">src/boltz/model/models/boltz2.py</span>: Score reporting</li>
+            </ol>
+        </section>
+
+        <section id="architecture">
+            <h2>2. Architecture Overview</h2>
+            
+            <div class="architecture-diagram">
+                <div class="step">User YAML Input</div>
+                <div class="arrow">↓</div>
+                <div class="step">schema.py (Parse YAML)</div>
+                <div class="arrow">↓</div>
+                <div class="step">types.py (Create Config Dataclass)</div>
+                <div class="arrow">↓</div>
+                <div class="step">main.py (Serialize to JSON)</div>
+                <div class="arrow">↓</div>
+                <div class="step">inferencev2.py (Deserialize from JSON)</div>
+                <div class="arrow">↓</div>
+                <div class="step">potentials.py (Create Potential Instance)</div>
+                <div class="arrow">↓</div>
+                <div class="step">Your Potential Implementation</div>
+                <div class="arrow">↓</div>
+                <div class="step">boltz2.py (Apply Forces & Report Scores)</div>
+            </div>
+        </section>
+
+        <section id="implementation">
+            <h2>3. Step-by-Step Implementation</h2>
+
+            <div class="step-card" id="step1">
+                <h3><span class="step-number">1</span>Define Configuration Dataclass</h3>
+                <p>First, create a configuration dataclass in <code>src/boltz/data/types.py</code>:</p>
+                
+                <pre><code>@dataclass(frozen=True)
+class MyGuidanceConfig:
+    """Configuration for my new experimental guidance."""
+    
+    # Required parameters
+    target_value: float  # The experimental target value
+    experimental_data_path: Optional[str] = None  # Path to experimental data file
+    
+    # Guidance parameters
+    force_constant: float = 10.0  # Force constant in kcal/mol/unit²
+    guidance_interval: tuple[int, int] = (0, 1000)  # Steps to apply guidance
+    
+    # Algorithm-specific parameters
+    calculation_method: str = "standard"  # Calculation method
+    mass_weighted: bool = True  # Use mass weighting
+    atom_selection: Optional[str] = None  # Atom selection string
+    
+    # Robustness parameters (recommended)
+    robust_mode: bool = True  # Enable robust calculation
+    max_displacement_per_step: float = 2.0  # Max atom displacement (Å)
+    outlier_threshold: float = 3.0  # Outlier detection threshold
+    gradient_capping: float = 10.0  # Max gradient magnitude
+    
+    # Force ramping (recommended for stability)
+    force_ramping: bool = True  # Gradually increase force
+    min_force_constant: float = 1.0  # Starting force constant
+    ramping_steps: int = 50  # Steps to reach full force</code></pre>
+
+                <p>Update the <code>GuidanceConfig</code> class to include your new guidance:</p>
+                
+                <pre><code>@dataclass(frozen=True)
+class GuidanceConfig:
+    """Guidance configuration."""
+    
+    saxs: Optional[SAXSGuidanceConfig] = None
+    rg: Optional[RgGuidanceConfig] = None
+    my_guidance: Optional[MyGuidanceConfig] = None  # Add your guidance</code></pre>
+
+                <div class="alert alert-warning">
+                    <span class="alert-icon">⚠️</span>
+                    <div>
+                        <strong>Important:</strong> Use <code>frozen=True</code> for immutability and 
+                        always provide sensible defaults for optional parameters.
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-card" id="step2">
+                <h3><span class="step-number">2</span>Add YAML Parsing</h3>
+                <p>In <code>src/boltz/data/parse/schema.py</code>, add parsing for your guidance:</p>
+                
+                <pre><code># Around line 1800, after Rg guidance parsing
+if "my_guidance" in guidance_section:
+    my_params = guidance_section["my_guidance"]
+    
+    # Validate required fields
+    if "target_value" not in my_params and "experimental_data_path" not in my_params:
+        msg = "My guidance requires either 'target_value' or 'experimental_data_path'"
+        raise ValueError(msg)
+    
+    my_config = MyGuidanceConfig(
+        target_value=my_params.get("target_value"),
+        experimental_data_path=my_params.get("experimental_data_path"),
+        force_constant=my_params.get("force_constant", 10.0),
+        guidance_interval=tuple(my_params.get("guidance_interval", [0, 1000])),
+        calculation_method=my_params.get("calculation_method", "standard"),
+        mass_weighted=my_params.get("mass_weighted", True),
+        atom_selection=my_params.get("atom_selection"),
+        # Robustness parameters
+        robust_mode=my_params.get("robust_mode", True),
+        max_displacement_per_step=my_params.get("max_displacement_per_step", 2.0),
+        outlier_threshold=my_params.get("outlier_threshold", 3.0),
+        gradient_capping=my_params.get("gradient_capping", 10.0),
+        force_ramping=my_params.get("force_ramping", True),
+        min_force_constant=my_params.get("min_force_constant", 1.0),
+        ramping_steps=my_params.get("ramping_steps", 50),
+    )</code></pre>
+            </div>
+
+            <div class="step-card" id="step3">
+                <h3><span class="step-number">3</span>Update JSON Serialization</h3>
+                <p>In <code>src/boltz/main.py</code>, update the guidance serialization (around line 615):</p>
+                
+                <pre><code>guidance_data = {
+    "saxs": {...} if target.guidance.saxs else None,
+    "rg": {...} if target.guidance.rg else None,
+    "my_guidance": {
+        "target_value": target.guidance.my_guidance.target_value,
+        "experimental_data_path": target.guidance.my_guidance.experimental_data_path,
+        "force_constant": target.guidance.my_guidance.force_constant,
+        "guidance_interval": list(target.guidance.my_guidance.guidance_interval),
+        "calculation_method": target.guidance.my_guidance.calculation_method,
+        "mass_weighted": target.guidance.my_guidance.mass_weighted,
+        "atom_selection": target.guidance.my_guidance.atom_selection,
+        # Include all robustness parameters
+        "robust_mode": target.guidance.my_guidance.robust_mode,
+        "max_displacement_per_step": target.guidance.my_guidance.max_displacement_per_step,
+        "outlier_threshold": target.guidance.my_guidance.outlier_threshold,
+        "gradient_capping": target.guidance.my_guidance.gradient_capping,
+        "force_ramping": target.guidance.my_guidance.force_ramping,
+        "min_force_constant": target.guidance.my_guidance.min_force_constant,
+        "ramping_steps": target.guidance.my_guidance.ramping_steps,
+    } if target.guidance.my_guidance else None
+}</code></pre>
+
+                <div class="alert alert-error">
+                    <span class="alert-icon">❌</span>
+                    <div>
+                        <strong>Critical:</strong> Ensure ALL parameters are serialized to JSON. 
+                        Missing parameters will revert to defaults during deserialization!
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-card" id="step4">
+                <h3><span class="step-number">4</span>Update JSON Deserialization</h3>
+                <p>In <code>src/boltz/data/module/inferencev2.py</code>, add loading for your guidance:</p>
+                
+                <pre><code># After Rg guidance loading (around line 150)
+my_config = None
+if guidance_data.get("my_guidance"):
+    my_data = guidance_data["my_guidance"]
+    my_config = MyGuidanceConfig(
+        target_value=my_data.get("target_value"),
+        experimental_data_path=my_data.get("experimental_data_path"),
+        force_constant=my_data.get("force_constant", 10.0),
+        guidance_interval=tuple(my_data.get("guidance_interval", [0, 1000])),
+        calculation_method=my_data.get("calculation_method", "standard"),
+        mass_weighted=my_data.get("mass_weighted", True),
+        atom_selection=my_data.get("atom_selection"),
+        # Robustness parameters - MUST match serialization!
+        robust_mode=my_data.get("robust_mode", True),
+        max_displacement_per_step=my_data.get("max_displacement_per_step", 2.0),
+        outlier_threshold=my_data.get("outlier_threshold", 3.0),
+        gradient_capping=my_data.get("gradient_capping", 10.0),
+        force_ramping=my_data.get("force_ramping", True),
+        min_force_constant=my_data.get("min_force_constant", 1.0),
+        ramping_steps=my_data.get("ramping_steps", 50),
+    )</code></pre>
+            </div>
+
+            <div class="step-card" id="step5">
+                <h3><span class="step-number">5</span>Implement the Potential</h3>
+                <p>Create <code>src/boltz/model/potentials/my_potential.py</code>:</p>
+                
+                <pre><code>import jax
+import jax.numpy as jnp
+from typing import Dict, Any, Optional, Tuple
+
+class MyGuidancePotential:
+    """Implementation of my experimental guidance potential."""
+    
+    def __init__(
+        self,
+        target_value: float,
+        force_constant: float = 10.0,
+        mass_weighted: bool = True,
+        calculation_method: str = "standard",
+        atom_selection: Optional[str] = None,
+        robust_mode: bool = True,
+        max_displacement_per_step: float = 2.0,
+        outlier_threshold: float = 3.0,
+        gradient_capping: float = 10.0,
+        force_ramping: bool = True,
+        min_force_constant: float = 1.0,
+        ramping_steps: int = 50,
+    ):
+        self.target_value = target_value
+        self.force_constant = force_constant
+        self.mass_weighted = mass_weighted
+        self.calculation_method = calculation_method
+        self.atom_selection = atom_selection
+        self.robust_mode = robust_mode
+        self.max_displacement_per_step = max_displacement_per_step
+        self.outlier_threshold = outlier_threshold
+        self.gradient_capping = gradient_capping
+        self.force_ramping = force_ramping
+        self.min_force_constant = min_force_constant
+        self.ramping_steps = ramping_steps
+        
+        print(f"Initialized MyGuidancePotential:")
+        print(f"  - Target value: {self.target_value}")
+        print(f"  - Force constant: {self.force_constant}")
+        print(f"  - Calculation method: {self.calculation_method}")
+        print(f"  - Robust mode: {self.robust_mode}")
+        print(f"  - Force ramping: {self.force_ramping}")
+    
+    def calculate_value(
+        self, 
+        coords: jnp.ndarray, 
+        atom_mask: jnp.ndarray,
+        atom_masses: Optional[jnp.ndarray] = None
+    ) -> jnp.ndarray:
+        """Calculate the experimental value from coordinates."""
+        valid_coords = coords[atom_mask]
+        
+        if self.calculation_method == "standard":
+            # Your calculation here
+            value = jnp.mean(jnp.linalg.norm(valid_coords, axis=-1))
+        elif self.calculation_method == "robust":
+            # Robust calculation with outlier detection
+            distances = jnp.linalg.norm(valid_coords, axis=-1)
+            median_dist = jnp.median(distances)
+            mad = jnp.median(jnp.abs(distances - median_dist))
+            outlier_mask = jnp.abs(distances - median_dist) > self.outlier_threshold * mad
+            clean_distances = jnp.where(outlier_mask, median_dist, distances)
+            value = jnp.mean(clean_distances)
+        else:
+            raise ValueError(f"Unknown calculation method: {self.calculation_method}")
+        
+        return value
+    
+    def energy_and_gradient(
+        self, 
+        coords: jnp.ndarray, 
+        atom_mask: jnp.ndarray,
+        atom_masses: Optional[jnp.ndarray] = None,
+        step: int = 0
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, Dict[str, Any]]:
+        """Calculate energy and gradients with respect to coordinates."""
+        # Calculate current value
+        current_value = self.calculate_value(coords, atom_mask, atom_masses)
+        
+        # Calculate error
+        error = current_value - self.target_value
+        
+        # Determine effective force constant (with optional ramping)
+        if self.force_ramping and step < self.ramping_steps:
+            k_eff = self.min_force_constant + (
+                (self.force_constant - self.min_force_constant) * 
+                (step / self.ramping_steps)
+            )
+        else:
+            k_eff = self.force_constant
+        
+        # Calculate energy
+        energy = 0.5 * k_eff * error ** 2
+        
+        # Calculate gradients using JAX autodiff
+        def _energy_fn(coords):
+            value = self.calculate_value(coords, atom_mask, atom_masses)
+            error = value - self.target_value
+            return 0.5 * k_eff * error ** 2
+        
+        gradients = jax.grad(_energy_fn)(coords)
+        
+        # Apply gradient capping if enabled
+        if self.gradient_capping > 0:
+            grad_norm = jnp.linalg.norm(gradients, axis=-1, keepdims=True)
+            scale_factor = jnp.minimum(1.0, self.gradient_capping / (grad_norm + 1e-8))
+            gradients = gradients * scale_factor
+        
+        # Prepare auxiliary data for logging
+        aux_data = {
+            "current_value": current_value,
+            "target_value": self.target_value,
+            "error": error,
+            "energy": energy,
+            "k_eff": k_eff,
+            "step": step,
+        }
+        
+        return energy, gradients, aux_data</code></pre>
+            </div>
+
+            <div class="step-card" id="step6">
+                <h3><span class="step-number">6</span>Integrate with Potentials System</h3>
+                <p>Update <code>src/boltz/model/potentials/potentials.py</code>:</p>
+                
+                <pre><code># Add import
+from boltz.model.potentials.my_potential import MyGuidanceWrapper
+
+# In the compute_validation_inputs function, add your guidance handling:
+my_guidance_energies = []
+my_guidance_config = getattr(inputs.guidance, 'my_guidance', None) if inputs.guidance else None
+
+if my_guidance_config is not None:
+    print(f"My guidance activated: target={my_guidance_config.target_value}")
+    
+    # Create wrapper instance
+    my_wrapper = MyGuidanceWrapper(my_guidance_config)
+    
+    for i in range(len(coords_batch)):
+        # Apply guidance
+        gradients, aux_data = my_wrapper.apply(
+            coords_batch[i],
+            resolved_mask[i],
+            atom_mask[i],
+            atom14_mask[i],
+            stage=0,
+            step=0,
+            self_cond=False,
+            structure=structure,
+        )
+        
+        # Store energy for confidence scoring
+        if "energy" in aux_data:
+            my_guidance_energies.append(aux_data["energy"])
+
+# Add to validation features
+if my_guidance_energies:
+    validation_feats["my_guidance_energy"] = jnp.array(my_guidance_energies)
+    validation_feats["my_guidance_error"] = jnp.array([
+        aux_data.get("error", 0.0) for aux_data in aux_data_list
+    ])</code></pre>
+            </div>
+
+            <div class="step-card" id="step7">
+                <h3><span class="step-number">7</span>Integration with Confidence Scoring</h3>
+                <p>Update <code>src/boltz/model/models/boltz2.py</code> to include your guidance in confidence scoring:</p>
+                
+                <pre><code># In the compute_confidence function (around line 600)
+# Add your guidance scoring
+my_guidance_score = None
+if "my_guidance_energy" in validation_feats:
+    # Calculate confidence based on how well we match the target
+    my_guidance_energy = validation_feats["my_guidance_energy"]
+    my_guidance_error = validation_feats["my_guidance_error"]
+    
+    # Convert error to confidence score (0-1 range)
+    error_threshold = 5.0  # Error value for 50% confidence
+    my_guidance_score = 1.0 / (1.0 + (my_guidance_error / error_threshold) ** 2)
+    
+    # Log the score
+    print(f"My guidance confidence score: {my_guidance_score:.3f} "
+          f"(error: {my_guidance_error:.3f})")
+
+# Combine with overall confidence
+if my_guidance_score is not None:
+    # Weight your guidance score (adjust weight as needed)
+    guidance_weight = 0.2  # 20% weight for guidance
+    
+    # Update overall confidence
+    combined_confidence = (
+        (1 - guidance_weight) * base_confidence + 
+        guidance_weight * my_guidance_score
+    )
+    
+    # Add to confidence output
+    confidence_dict["my_guidance_score"] = float(my_guidance_score)
+    confidence_dict["my_guidance_error"] = float(my_guidance_error)
+    confidence_dict["combined_confidence"] = float(combined_confidence)</code></pre>
+            </div>
+        </section>
+
+        <section id="testing">
+            <h2>4. Testing and Validation</h2>
+
+            <h3>Create Test YAML Configuration</h3>
+            <p>Create <code>examples/test_my_guidance.yaml</code>:</p>
+            
+            <pre><code>version: 1
+sequences:
+  - protein:
+      id: A
+      sequence: MVLSEGEWQLVLHVWAKVEADVAGHGQDILIRLFKSHPETLEKF
+
+guidance:
+  my_guidance:
+    target_value: 25.0  # Target experimental value
+    force_constant: 50.0
+    calculation_method: "robust"
+    mass_weighted: true
+    
+    # Robustness parameters
+    robust_mode: true
+    force_ramping: false  # Disable for immediate effect
+    max_displacement_per_step: 3.0
+    outlier_threshold: 2.5
+    gradient_capping: 20.0
+    
+    # When to apply guidance
+    guidance_interval: [0, 1000]
+
+output:
+  confidence_detailed: true  # Get detailed confidence scores</code></pre>
+
+            <h3>Write Unit Tests</h3>
+            <p>Create <code>tests/test_my_guidance.py</code>:</p>
+            
+            <pre><code>import pytest
+import jax.numpy as jnp
+from boltz.data.types import MyGuidanceConfig
+from boltz.model.potentials.my_potential import MyGuidancePotential, MyGuidanceWrapper
+
+def test_my_guidance_potential():
+    """Test the basic potential calculation."""
+    potential = MyGuidancePotential(
+        target_value=25.0,
+        force_constant=10.0,
+        calculation_method="standard"
+    )
+    
+    # Create test coordinates
+    coords = jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    atom_mask = jnp.array([True, True])
+    
+    # Calculate energy
+    energy, aux_data = potential.energy(coords, atom_mask, step=0)
+    
+    assert "current_value" in aux_data
+    assert "error" in aux_data
+    assert energy >= 0  # Energy should be non-negative
+
+def test_gradient_capping():
+    """Test that gradient capping works correctly."""
+    potential = MyGuidancePotential(
+        target_value=100.0,  # Large target to create large gradients
+        force_constant=1000.0,  # Large force constant
+        gradient_capping=1.0  # Small cap
+    )
+    
+    coords = jnp.zeros((10, 3))
+    atom_mask = jnp.ones(10, dtype=bool)
+    
+    energy, gradients, aux_data = potential.energy_and_gradient(
+        coords, atom_mask, step=0
+    )
+    
+    # Check that no gradient exceeds the cap
+    grad_norms = jnp.linalg.norm(gradients, axis=-1)
+    assert jnp.all(grad_norms <= 1.0 + 1e-6)
+
+def test_force_ramping():
+    """Test that force ramping works correctly."""
+    potential = MyGuidancePotential(
+        target_value=25.0,
+        force_constant=100.0,
+        force_ramping=True,
+        min_force_constant=1.0,
+        ramping_steps=50
+    )
+    
+    coords = jnp.ones((5, 3))
+    atom_mask = jnp.ones(5, dtype=bool)
+    
+    # Test at different steps
+    energies = []
+    for step in [0, 25, 50, 100]:
+        energy, aux_data = potential.energy(coords, atom_mask, step=step)
+        energies.append(aux_data["k_eff"])
+    
+    # Check ramping progression
+    assert energies[0] == 1.0  # Minimum at step 0
+    assert energies[1] > energies[0]  # Increasing
+    assert energies[2] == 100.0  # Full force at step 50
+    assert energies[3] == 100.0  # Stays at full force</code></pre>
+        </section>
+
+        <section id="best-practices">
+            <h2>5. Best Practices</h2>
+
+            <div class="alert alert-success">
+                <span class="alert-icon">✅</span>
+                <div>
+                    <h4>Robustness and Stability</h4>
+                    <ul>
+                        <li><strong>Always implement gradient capping</strong> to prevent explosive forces</li>
+                        <li><strong>Use force ramping</strong> for large force constants to ensure stability</li>
+                        <li><strong>Implement outlier detection</strong> for robust calculations</li>
+                        <li><strong>Limit maximum displacement</strong> per step to prevent structure disruption</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="alert alert-info">
+                <span class="alert-icon">⚡</span>
+                <div>
+                    <h4>Performance Optimization</h4>
+                    <ul>
+                        <li><strong>Use JAX operations</strong> for automatic differentiation and GPU acceleration</li>
+                        <li><strong>Vectorize calculations</strong> when possible for batch processing</li>
+                        <li><strong>Cache expensive computations</strong> if they're reused</li>
+                        <li><strong>Profile your code</strong> to identify bottlenecks</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="alert alert-warning">
+                <span class="alert-icon">👥</span>
+                <div>
+                    <h4>User Experience</h4>
+                    <ul>
+                        <li><strong>Provide clear error messages</strong> for invalid configurations</li>
+                        <li><strong>Log progress periodically</strong> to help users monitor convergence</li>
+                        <li><strong>Document all parameters</strong> with reasonable defaults</li>
+                        <li><strong>Include example configurations</strong> in the documentation</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="example">
+            <h2>6. Complete Example: Hydrophobic Moment Guidance</h2>
+            
+            <p>Here's a complete example of integrating a "Hydrophobic Moment" guidance:</p>
+
+            <h3>Configuration (types.py)</h3>
+            <pre><code>@dataclass(frozen=True)
+class HydrophobicMomentConfig:
+    """Configuration for hydrophobic moment guidance."""
+    target_moment: float
+    force_constant: float = 10.0
+    window_size: int = 11  # Helix window
+    force_ramping: bool = True
+    min_force_constant: float = 1.0
+    ramping_steps: int = 50</code></pre>
+
+            <h3>Implementation (hydrophobic_moment_potential.py)</h3>
+            <pre><code>class HydrophobicMomentPotential:
+    """Guide protein folding based on hydrophobic moment."""
+    
+    def calculate_moment(self, coords, sequence, atom_mask):
+        """Calculate hydrophobic moment for alpha helices."""
+        # Implementation details...
+        
+    def energy_and_gradient(self, coords, sequence, atom_mask, step):
+        """Calculate energy and forces."""
+        current_moment = self.calculate_moment(coords, sequence, atom_mask)
+        error = current_moment - self.target_moment
+        
+        # Ramping
+        if self.force_ramping and step < self.ramping_steps:
+            k_eff = self.min_force_constant + (
+                (self.force_constant - self.min_force_constant) * 
+                (step / self.ramping_steps)
+            )
+        else:
+            k_eff = self.force_constant
+        
+        energy = 0.5 * k_eff * error ** 2
+        
+        # Calculate gradients...
+        return energy, gradients, {"moment": current_moment, "error": error}</code></pre>
+
+            <h3>Usage Example</h3>
+            <pre><code>version: 1
+sequences:
+  - protein:
+      id: A
+      sequence: MVLSEGEWQLVLHVWAKVEADVAGHGQDILIRLFKSHPETLEKF
+
+guidance:
+  hydrophobic_moment:
+    target_moment: 0.5  # Target hydrophobic moment
+    force_constant: 30.0
+    window_size: 11
+    force_ramping: true
+    ramping_steps: 100</code></pre>
+        </section>
+
+        <section id="troubleshooting">
+            <h2>7. Troubleshooting</h2>
+
+            <h3>Common Issues</h3>
+            
+            <div class="alert alert-error">
+                <span class="alert-icon">🐛</span>
+                <div>
+                    <h4>Parameters not passing through</h4>
+                    <p>Check all 4 locations: schema.py, main.py serialization, inferencev2.py deserialization, types.py</p>
+                </div>
+            </div>
+
+            <div class="alert alert-error">
+                <span class="alert-icon">💥</span>
+                <div>
+                    <h4>Gradients exploding</h4>
+                    <p>Implement gradient capping and force ramping</p>
+                </div>
+            </div>
+
+            <div class="alert alert-error">
+                <span class="alert-icon">📊</span>
+                <div>
+                    <h4>Confidence scores not appearing</h4>
+                    <p>Ensure validation_feats are properly populated and passed to confidence calculation</p>
+                </div>
+            </div>
+
+            <h3>Debugging Tips</h3>
+            <ol>
+                <li>Add print statements at each stage of the pipeline</li>
+                <li>Save intermediate values to files for inspection</li>
+                <li>Use small test cases to validate calculations</li>
+                <li>Compare numerical gradients with finite differences</li>
+                <li>Visualize the guided structures to ensure sensible behavior</li>
+            </ol>
+        </section>
+
+        <section>
+            <h2>Conclusion</h2>
+            <p>
+                This guide provides a complete framework for integrating new guiding potentials into Boltz. 
+                The key steps are:
+            </p>
+            
+            <ol>
+                <li>Define configuration dataclass</li>
+                <li>Implement YAML parsing</li>
+                <li>Add JSON serialization/deserialization</li>
+                <li>Implement the potential with gradients</li>
+                <li>Integrate with the potentials system</li>
+                <li>Add confidence scoring</li>
+                <li>Test thoroughly</li>
+            </ol>
+            
+            <p>
+                Following this pattern ensures your guidance integrates smoothly with Boltz's architecture 
+                and provides users with a consistent, robust experience.
+            </p>
+            
+            <a href="#toc" class="button">Back to Top</a>
+        </section>
+    </div>
+
+    <a href="#" class="back-to-top" id="backToTop">↑</a>
+
+    <script>
+        // Smooth scrolling for navigation links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Back to top button
+        const backToTopButton = document.getElementById('backToTop');
+        
+        window.addEventListener('scroll', () => {
+            if (window.pageYOffset > 300) {
+                backToTopButton.classList.add('visible');
+            } else {
+                backToTopButton.classList.remove('visible');
+            }
+        });
+
+        // Highlight current section in navigation
+        const sections = document.querySelectorAll('section[id]');
+        const navLinks = document.querySelectorAll('nav a');
+        
+        window.addEventListener('scroll', () => {
+            let current = '';
+            
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.clientHeight;
+                if (pageYOffset >= sectionTop - 100) {
+                    current = section.getAttribute('id');
+                }
+            });
+            
+            navLinks.forEach(link => {
+                link.style.fontWeight = 'normal';
+                if (link.getAttribute('href') === `#${current}`) {
+                    link.style.fontWeight = 'bold';
+                }
+            });
+        });
+
+        // Copy code functionality
+        document.querySelectorAll('pre').forEach(pre => {
+            // Create copy button
+            const button = document.createElement('button');
+            button.className = 'code-header';
+            button.textContent = 'Copy';
+            button.style.cursor = 'pointer';
+            
+            button.addEventListener('click', () => {
+                const code = pre.querySelector('code');
+                const text = code.textContent;
+                
+                navigator.clipboard.writeText(text).then(() => {
+                    button.textContent = 'Copied!';
+                    setTimeout(() => {
+                        button.textContent = 'Copy';
+                    }, 2000);
+                });
+            });
+            
+            pre.appendChild(button);
+        });
+    </script>
+</body>
+</html>

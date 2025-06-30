@@ -598,6 +598,46 @@ def process_input(  # noqa: C901, PLR0912, PLR0915, D103
         record_path = records_dir / f"{target.record.id}.json"
         target.record.dump(record_path)
 
+        # Dump guidance config if it exists
+        if target.guidance is not None:
+            import json
+            guidance_path = processed_constraints_dir / f"{target.record.id}_guidance.json"
+            guidance_data = {
+                "saxs": {
+                    "experimental_data": target.guidance.saxs.experimental_data,
+                    "guidance_weight": target.guidance.saxs.guidance_weight,
+                    "guidance_interval": target.guidance.saxs.guidance_interval,
+                    "resampling_weight": target.guidance.saxs.resampling_weight,
+                    "voxel_size": target.guidance.saxs.voxel_size,
+                    "oversampling": target.guidance.saxs.oversampling,
+                    "gradient_epsilon": target.guidance.saxs.gradient_epsilon,
+                } if target.guidance.saxs else None,
+                "rg": {
+                    "target_rg": target.guidance.rg.target_rg,
+                    "saxs_file_path": target.guidance.rg.saxs_file_path,
+                    "force_constant": target.guidance.rg.force_constant,
+                    "q_min": target.guidance.rg.q_min,
+                    "q_max": target.guidance.rg.q_max,
+                    "mass_weighted": target.guidance.rg.mass_weighted,
+                    "atom_selection": target.guidance.rg.atom_selection,
+                    # PDB target calculation parameters
+                    "reference_pdb_path": target.guidance.rg.reference_pdb_path,
+                    "pdb_chain_id": target.guidance.rg.pdb_chain_id,
+                    "pdb_atom_selection": target.guidance.rg.pdb_atom_selection,
+                    # Include robustness parameters
+                    "robust_mode": target.guidance.rg.robust_mode,
+                    "max_displacement_per_step": target.guidance.rg.max_displacement_per_step,
+                    "outlier_threshold": target.guidance.rg.outlier_threshold,
+                    "rg_calculation_method": target.guidance.rg.rg_calculation_method,
+                    "gradient_capping": target.guidance.rg.gradient_capping,
+                    "force_ramping": target.guidance.rg.force_ramping,
+                    "min_force_constant": target.guidance.rg.min_force_constant,
+                    "ramping_steps": target.guidance.rg.ramping_steps,
+                } if target.guidance.rg else None
+            }
+            with guidance_path.open("w") as f:
+                json.dump(guidance_data, f)
+
     except Exception as e:  # noqa: BLE001
         import traceback
 

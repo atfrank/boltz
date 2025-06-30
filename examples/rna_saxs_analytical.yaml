@@ -1,0 +1,16 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+guidance:
+  saxs:
+    experimental_data: ./examples/set_2.dat
+    guidance_weight: 1000.0  # Reduced 10x to prevent structural instability
+    guidance_interval: 1  # Always active - no intervals
+    resampling_weight: 0.05
+    voxel_size: 2.0
+    oversampling: 3.0
+    gradient_epsilon: 0.1
+    gradient_method: analytical  # PyTorch autograd (default, efficient and exact)

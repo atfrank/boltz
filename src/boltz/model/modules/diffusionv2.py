@@ -302,6 +302,7 @@ class AtomDiffusion(Module):
         init_coords_path=None,
         noise_specs=None,
         structure=None,
+        guidance=None,
         save_trajectory=False,
         non_target_noise_min=0.1,
         non_target_noise_range=0.2,
@@ -310,7 +311,52 @@ class AtomDiffusion(Module):
         residue_based_selection=False,
         **network_condition_kwargs,
     ):
-        potentials = get_potentials()
+        # Set default steering args if not provided
+        if steering_args is None:
+            steering_args = {
+                "fk_steering": False,
+                "guidance_update": True,  # Enable guidance by default when SAXS is present
+                "num_gd_steps": 1,
+                "num_particles": 1,
+                "fk_resampling_interval": 1,
+                "fk_lambda": 1.0
+            }
+        
+        # Enable guidance if SAXS or Rg is present (override default steering args)
+        if guidance is not None:
+            guidance_obj = guidance[0] if isinstance(guidance, list) else guidance
+            has_saxs = guidance_obj is not None and hasattr(guidance_obj, 'saxs') and guidance_obj.saxs is not None
+            has_rg = guidance_obj is not None and hasattr(guidance_obj, 'rg') and guidance_obj.rg is not None
+            
+            if has_saxs or has_rg:
+                # Override steering args to enable guidance
+                steering_args = dict(steering_args)  # Make a copy
+                steering_args["guidance_update"] = True
+                if steering_args["num_gd_steps"] < 1:
+                    steering_args["num_gd_steps"] = 1
+        
+        # Extract guidance configs if available
+        saxs_guidance_config = None
+        rg_guidance_config = None
+        if guidance is not None:
+            # Handle case where guidance comes as a list (from batch collation)
+            if isinstance(guidance, list):
+                guidance_obj = guidance[0]  # Take first item from batch
+            else:
+                guidance_obj = guidance
+                
+            if guidance_obj is not None:
+                if hasattr(guidance_obj, 'saxs') and guidance_obj.saxs is not None:
+                    saxs_guidance_config = guidance_obj.saxs
+                    print(f"SAXS guidance activated: weight={saxs_guidance_config.guidance_weight}, interval={saxs_guidance_config.guidance_interval}")
+                
+                if hasattr(guidance_obj, 'rg') and guidance_obj.rg is not None:
+                    rg_guidance_config = guidance_obj.rg
+                    print(f"Rg guidance activated: target={rg_guidance_config.target_rg}, force_constant={rg_guidance_config.force_constant}")
+                else:
+                    print(f"No Rg guidance found in guidance object. Has rg attribute: {hasattr(guidance_obj, 'rg')}")
+        
+        potentials = get_potentials(saxs_guidance_config=saxs_guidance_config, rg_guidance_config=rg_guidance_config)
         if steering_args["fk_steering"]:
             multiplicity = multiplicity * steering_args["num_particles"]
             energy_traj = torch.empty((multiplicity, 0), device=self.device)
@@ -459,12 +505,13 @@ class AtomDiffusion(Module):
         token_repr = None
         atom_coords_denoised = None
         
-        # Initialize trajectory storage
+        # Initialize trajectory storage for all samples
         trajectory_coords = []
         if save_trajectory:
-            # Store initial coordinates (centered and first batch element only)
+            # Store initial coordinates (centered, only first sample to ensure consistency)
             centered_initial = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
-            trajectory_coords.append(centered_initial[0:1].clone().cpu())
+            # Only store first sample to avoid dimension issues with resampling
+            trajectory_coords.append(centered_initial[:1].clone().cpu())
 
         # gradually denoise
         for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(sigmas_and_gammas):
@@ -592,6 +639,11 @@ class AtomDiffusion(Module):
                     for guidance_step in range(steering_args["num_gd_steps"]):
                         energy_gradient = torch.zeros_like(atom_coords_denoised)
                         for potential in potentials:
+                            # Set step information for SAXS logging
+                            if hasattr(potential, 'set_step_info'):
+                                for sample_idx in range(multiplicity):
+                                    potential.set_step_info(step_idx, sample_idx)
+                            
                             parameters = potential.compute_parameters(steering_t)
                             if (
                                 parameters["guidance_weight"] > 0
@@ -667,22 +719,88 @@ class AtomDiffusion(Module):
 
             atom_coords = atom_coords_next
             
+            # Update SAXS potentials with current step info
+            for potential in potentials:
+                if hasattr(potential, 'set_step_info'):
+                    # Set step info for each sample in the batch
+                    for sample_idx in range(multiplicity):
+                        potential.set_step_info(step_idx, sample_idx)
+            
             # Save trajectory step if requested (after centering like final coordinates)
             if save_trajectory:
-                # Center coordinates like final output and store only first batch element
+                # Center coordinates like final output and store all samples
                 centered_coords = atom_coords - atom_coords.mean(dim=-2, keepdims=True)
-                trajectory_coords.append(centered_coords[0:1].clone().cpu())
+                # Ensure consistent batch size by only saving the first sample if resampling changed sizes
+                if len(trajectory_coords) > 0 and centered_coords.shape[0] != trajectory_coords[0].shape[0]:
+                    # Take only the first sample to maintain consistent dimensions
+                    centered_coords = centered_coords[:1]
+                trajectory_coords.append(centered_coords.clone().cpu())
 
         # Prepare output dictionary
         output_dict = dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
         
         # Add trajectory if saved
         if save_trajectory and trajectory_coords:
-            # Stack trajectory frames
-            trajectory_tensor = torch.cat(trajectory_coords, dim=0)
+            # Stack trajectory frames: trajectory_coords is list of [num_samples, num_atoms, 3]
+            # We want final shape [num_timesteps, num_samples, num_atoms, 3]
+            trajectory_tensor = torch.stack(trajectory_coords, dim=0)
             output_dict['trajectory_coords'] = trajectory_tensor
-            print(f"Saved trajectory with {len(trajectory_coords)} steps")
+            print(f"Saved trajectory with {len(trajectory_coords)} steps for {multiplicity} samples")
         
+        # Collect SAXS chi-squared logs if available
+        saxs_logs = {}
+        for potential in potentials:
+            if hasattr(potential, '_chi2_logs') and potential._chi2_logs:
+                saxs_logs.update(potential._chi2_logs)
+                
+                # Save chi2 logs to file
+                if hasattr(potential, 'save_chi2_log'):
+                    potential.save_chi2_log()
+                
+                # Print summary
+                summary = potential.get_chi2_summary()
+                if summary:
+                    for sample_id, stats in summary.items():
+                        print(f"SAXS guidance sample {sample_id}: min_chi2={stats['min_chi2']:.2f}, "
+                              f"final_chi2={stats['final_chi2']:.2f}, "
+                              f"evaluations={stats['num_evaluations']}")
+        
+        # Add SAXS logs to output if available
+        if saxs_logs:
+            output_dict['saxs_logs'] = saxs_logs
+        
+        # Collect Rg guidance information if available
+        rg_info = {}
+        print(f"Diffusion: Checking {len(potentials)} potentials for Rg guidance...")
+        for i, potential in enumerate(potentials):
+            print(f"  Potential {i}: {type(potential).__name__}, "
+                  f"has_get_final_rg={hasattr(potential, 'get_final_rg')}, "
+                  f"has_get_target_rg={hasattr(potential, 'get_target_rg')}")
+            if hasattr(potential, 'get_final_rg') and hasattr(potential, 'get_target_rg'):
+                final_rg = potential.get_final_rg()
+                target_rg = potential.get_target_rg()
+                print(f"  Potential {i}: final_rg={final_rg}, target_rg={target_rg}")
+                if final_rg is not None:
+                    rg_info = {
+                        'final_rg': final_rg,
+                        'target_rg': target_rg,
+                        'rg_error': abs(final_rg - target_rg) if target_rg else None,
+                        'rg_relative_error': abs(final_rg - target_rg) / target_rg * 100 if target_rg else None
+                    }
+                    print(f"Rg guidance final result: Rg={final_rg:.2f}Å, "
+                          f"target={target_rg:.2f}Å, "
+                          f"error={abs(final_rg - target_rg):.2f}Å "
+                          f"({abs(final_rg - target_rg) / target_rg * 100:.1f}%)")
+                    break
+        
+        # Add Rg info to output if available
+        if rg_info:
+            output_dict['rg_guidance'] = rg_info
+            print(f"Diffusion: Added rg_guidance to output_dict: {rg_info}")
+        else:
+            print("Diffusion: No rg_info to add to output_dict")
+        
+        print(f"Diffusion: Final output_dict keys: {list(output_dict.keys())}")
         return output_dict
 
     def loss_weight(self, sigma):

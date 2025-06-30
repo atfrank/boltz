@@ -1,0 +1,28 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Test with fixed configuration parsing and target 30Å
+guidance:
+  rg:
+    target_rg: 30.0  # Higher target for better convergence test
+    force_constant: 100.0  # High force constant
+    mass_weighted: true
+    
+    # Test fixed configuration passing
+    robust_mode: true
+    max_displacement_per_step: 3.0  # Larger movements to reach target
+    outlier_threshold: 3.0
+    rg_calculation_method: "robust"
+    gradient_capping: 20.0  # Higher gradient cap for stronger forces
+    force_ramping: false  # NO RAMPING - should now work!
+    min_force_constant: 99.0  # Should not matter if ramping disabled
+    ramping_steps: 1  # Should not matter if ramping disabled
+
+scoring:
+  saxs:
+    experimental_file: "./examples/set_2.dat"
+    max_q_points: 100
+    output_dir: "./saxs_results"

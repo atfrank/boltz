@@ -539,8 +539,9 @@ class Boltz2(LightningModule):
                     no_random_augmentation = self.predict_args.get("no_random_augmentation", False)
                     residue_based_selection = self.predict_args.get("residue_based_selection", False)
                 
-                # Extract structure separately
+                # Extract structure and guidance separately
                 structure = feats.get("structure", None)
+                guidance = feats.get("guidance", None)
                 
                 with torch.autocast("cuda", enabled=False):
                     struct_out = self.structure_module.sample(
@@ -556,6 +557,7 @@ class Boltz2(LightningModule):
                         init_coords_path=init_coords_path,
                         noise_specs=noise_specs,
                         structure=structure,
+                        guidance=guidance,
                         save_trajectory=save_trajectory,
                         non_target_noise_min=non_target_noise_min,
                         non_target_noise_range=non_target_noise_range,
@@ -1143,6 +1145,11 @@ class Boltz2(LightningModule):
                     pred_dict["affinity_probability_binary2"] = out[
                         "affinity_probability_binary2"
                     ]
+            
+            # Add Rg guidance information if available
+            if "rg_guidance" in out:
+                pred_dict["rg_guidance"] = out["rg_guidance"]
+            
             return pred_dict
 
         except RuntimeError as e:  # catch out of memory exceptions

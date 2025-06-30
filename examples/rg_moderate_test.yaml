@@ -1,0 +1,22 @@
+version: 1
+sequences:
+  - rna:
+      id: A
+      sequence: GGCUUAUCAAGAGAGGUGGAGGGACUGGCCCGAUGAAACCCGGCAACCAGAAAUGGUGCCAAUUCCUGCAGCGGAAACGUUGAAAGAUGAGCCG
+
+# Moderate configuration for better convergence
+guidance:
+  rg:
+    target_rg: 25.0  # Moderate target
+    force_constant: 1000.0  # Moderate force constant
+    mass_weighted: true
+    
+    # Balanced robustness parameters
+    robust_mode: true
+    force_ramping: false  # No ramping - use full force
+    max_displacement_per_step: 3.0  # Moderate displacement limit
+    outlier_threshold: 2.5  # Standard outlier detection
+    rg_calculation_method: "robust"
+    gradient_capping: 20.0  # Moderate gradient cap
+    min_force_constant: 500.0  # Not used when ramping disabled
+    ramping_steps: 1  # Not used when ramping disabled

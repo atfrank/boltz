@@ -620,6 +620,60 @@ class ResidueConstraints(NumpySerializable):
 
 
 ####################################################################################################
+# GUIDANCE
+####################################################################################################
+
+
+@dataclass(frozen=True)
+class SAXSGuidanceConfig:
+    """SAXS guidance configuration."""
+    
+    experimental_data: str
+    guidance_weight: float = 0.1
+    guidance_interval: int = 5
+    resampling_weight: float = 0.05
+    voxel_size: float = 2.0
+    oversampling: float = 3.0
+    gradient_epsilon: float = 0.1
+
+
+@dataclass(frozen=True)
+class RgGuidanceConfig:
+    """Radius of gyration guidance configuration with robustness features."""
+    
+    target_rg: Optional[float] = None
+    saxs_file_path: Optional[str] = None
+    force_constant: float = 10.0
+    q_min: float = 0.01
+    q_max: float = 0.05
+    mass_weighted: bool = True
+    atom_selection: Optional[str] = None
+    
+    # PDB target calculation
+    reference_pdb_path: Optional[str] = None  # Path to reference PDB structure
+    pdb_chain_id: Optional[str] = None  # Specific chain to use for Rg calculation
+    pdb_atom_selection: Optional[str] = None  # Atom selection for PDB ('all', 'backbone', 'heavy')
+    
+    # Robustness parameters to prevent extreme atom displacement
+    robust_mode: bool = True  # Enable robust Rg calculation and constraints
+    max_displacement_per_step: float = 2.0  # Maximum atom displacement per diffusion step (Å)
+    outlier_threshold: float = 3.0  # Standard deviations for outlier detection
+    rg_calculation_method: str = "robust"  # "standard", "robust", or "trimmed"
+    gradient_capping: float = 10.0  # Maximum gradient magnitude per atom (kcal/mol/Å)
+    force_ramping: bool = True  # Gradually increase force constant
+    min_force_constant: float = 1.0  # Starting force constant for ramping
+    ramping_steps: int = 50  # Steps to reach full force constant
+
+
+@dataclass(frozen=True)
+class GuidanceConfig:
+    """Guidance configuration."""
+    
+    saxs: Optional[SAXSGuidanceConfig] = None
+    rg: Optional[RgGuidanceConfig] = None
+
+
+####################################################################################################
 # TARGET
 ####################################################################################################
 
@@ -634,6 +688,7 @@ class Target:
     residue_constraints: Optional[ResidueConstraints] = None
     templates: Optional[dict[str, StructureV2]] = None
     extra_mols: Optional[dict[str, Mol]] = None
+    guidance: Optional[GuidanceConfig] = None
 
 
 @dataclass(frozen=True)
@@ -691,6 +746,7 @@ class Input:
     residue_constraints: Optional[ResidueConstraints] = None
     templates: Optional[dict[str, StructureV2]] = None
     extra_mols: Optional[dict[str, Mol]] = None
+    guidance: Optional[GuidanceConfig] = None
 
 
 ####################################################################################################

@@ -30,6 +30,7 @@ from boltz.data.types import (
     Connection,
     Coords,
     Ensemble,
+    GuidanceConfig,
     InferenceOptions,
     Interface,
     PlanarBondConstraint,
@@ -39,6 +40,8 @@ from boltz.data.types import (
     Record,
     Residue,
     ResidueConstraints,
+    RgGuidanceConfig,
+    SAXSGuidanceConfig,
     StereoBondConstraint,
     Structure,
     StructureInfo,
@@ -1739,6 +1742,84 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         planar_ring_6_constraints=planar_ring_6_constraints,
     )
 
+    # Parse guidance configuration
+    guidance_config = None
+    guidance_section = schema.get("guidance", {})
+    if guidance_section:
+        saxs_config = None
+        rg_config = None
+        
+        # Parse SAXS guidance
+        if "saxs" in guidance_section:
+            saxs_params = guidance_section["saxs"]
+            if "experimental_data" not in saxs_params:
+                msg = "SAXS guidance requires 'experimental_data' field"
+                raise ValueError(msg)
+            
+            saxs_config = SAXSGuidanceConfig(
+                experimental_data=saxs_params["experimental_data"],
+                guidance_weight=saxs_params.get("guidance_weight", 0.1),
+                guidance_interval=saxs_params.get("guidance_interval", 5),
+                resampling_weight=saxs_params.get("resampling_weight", 0.05),
+                voxel_size=saxs_params.get("voxel_size", 2.0),
+                oversampling=saxs_params.get("oversampling", 3.0),
+                gradient_epsilon=saxs_params.get("gradient_epsilon", 0.1),
+            )
+        
+        # Parse Rg guidance
+        if "rg" in guidance_section:
+            rg_params = guidance_section["rg"]
+            
+            # Debug: Print the actual rg_params being parsed from YAML
+            print(f"SCHEMA DEBUG: rg_params from YAML = {rg_params}")
+            
+            # Validate that either target_rg, saxs_file_path, or reference_pdb_path is provided
+            if "target_rg" not in rg_params and "saxs_file_path" not in rg_params and "reference_pdb_path" not in rg_params:
+                msg = "Rg guidance requires either 'target_rg', 'saxs_file_path', or 'reference_pdb_path' field"
+                raise ValueError(msg)
+            
+            # Debug: Print individual parameter values being passed to RgGuidanceConfig
+            target_rg_val = rg_params.get("target_rg")
+            force_constant_val = rg_params.get("force_constant", 10.0)
+            force_ramping_val = rg_params.get("force_ramping", True)
+            max_displacement_val = rg_params.get("max_displacement_per_step", 2.0)
+            gradient_capping_val = rg_params.get("gradient_capping", 10.0)
+            outlier_threshold_val = rg_params.get("outlier_threshold", 3.0)
+            
+            print(f"SCHEMA DEBUG: Constructing RgGuidanceConfig with:")
+            print(f"  force_ramping={force_ramping_val}")
+            print(f"  max_displacement_per_step={max_displacement_val}")
+            print(f"  gradient_capping={gradient_capping_val}")
+            print(f"  outlier_threshold={outlier_threshold_val}")
+            
+            rg_config = RgGuidanceConfig(
+                target_rg=target_rg_val,
+                saxs_file_path=rg_params.get("saxs_file_path"),
+                force_constant=force_constant_val,
+                q_min=rg_params.get("q_min", 0.01),
+                q_max=rg_params.get("q_max", 0.05),
+                mass_weighted=rg_params.get("mass_weighted", True),
+                atom_selection=rg_params.get("atom_selection"),
+                # PDB target calculation parameters
+                reference_pdb_path=rg_params.get("reference_pdb_path"),
+                pdb_chain_id=rg_params.get("pdb_chain_id"),
+                pdb_atom_selection=rg_params.get("pdb_atom_selection"),
+                # Parse robustness parameters from YAML
+                robust_mode=rg_params.get("robust_mode", True),
+                max_displacement_per_step=max_displacement_val,
+                outlier_threshold=outlier_threshold_val,
+                rg_calculation_method=rg_params.get("rg_calculation_method", "robust"),
+                gradient_capping=gradient_capping_val,
+                force_ramping=force_ramping_val,
+                min_force_constant=rg_params.get("min_force_constant", 1.0),
+                ramping_steps=rg_params.get("ramping_steps", 50),
+            )
+            
+            print(f"SCHEMA DEBUG: Created RgGuidanceConfig object: {rg_config}")
+        
+        if saxs_config or rg_config:
+            guidance_config = GuidanceConfig(saxs=saxs_config, rg=rg_config)
+
     return Target(
         record=record,
         structure=data,
@@ -1746,6 +1827,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         residue_constraints=residue_constraints,
         templates=templates,
         extra_mols=extra_mols,
+        guidance=guidance_config,
     )
 
 

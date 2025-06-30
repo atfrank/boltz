@@ -1,0 +1,19 @@
+version: 1
+sequences:
+  - protein:
+      id: A
+      sequence: MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWERVMGDGERQFSTLKSTVEAIWAGIKATEAAVSEEFGLAPFLPDQIHFVHSQELLSRYPDLDAKGRERAIAKDLGAVFLVGIGGKLSDGHRHDVRAPDYDDWUFY
+
+# Protein Rg guidance - useful for maintaining proper compactness
+guidance:
+  rg:
+    target_rg: 18.2  # Typical for ~100 residue protein
+    force_constant: 5.0  # Lower force for proteins (softer restraint)
+    mass_weighted: true
+
+# SAXS scoring if experimental data is available
+scoring:
+  saxs:
+    experimental_file: "./data/protein_saxs.dat"  # User-provided file
+    max_q_points: 80
+    output_dir: "./protein_saxs_results"
